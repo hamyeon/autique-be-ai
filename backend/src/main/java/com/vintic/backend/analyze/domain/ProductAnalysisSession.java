@@ -139,11 +139,28 @@ public class ProductAnalysisSession {
         this.failureMessage = message;
     }
 
+    // #130: IMAGE_UPLOADED에서만 QUEUED로 전이한다 - 이 가드 덕분에, enqueue보다 먼저 이
+    // 전이를 커밋하는 호출부(AnalysisQueueCommitter)가 사이에 취소 등으로 상태가 바뀐 세션을
+    // 잘못 QUEUED로 되돌리지 않는다.
     public void markQueued() {
+        if (status != AnalysisStatus.IMAGE_UPLOADED) {
+            throw new InvalidAnalysisStatusException(
+                    "큐에 적재할 수 없는 분석 상태입니다. 현재 상태: " + status
+            );
+        }
         this.status = AnalysisStatus.QUEUED;
     }
 
+    // #130: QUEUED에서만 QUEUE_FAILED로 전이한다. enqueue 예외는 "메시지가 발행되지 않았다"를
+    // 보장하지 않으므로(네트워크 ack 실패 등 ambiguous 케이스), 이 가드가 없으면 실제로는
+    // Worker가 이미 가져갔거나(VISION_PROCESSING) 사용자가 취소한(CANCELLED) 세션을 뒤늦게
+    // QUEUE_FAILED로 덮어쓸 수 있다.
     public void failQueueing(String message) {
+        if (status != AnalysisStatus.QUEUED) {
+            throw new InvalidAnalysisStatusException(
+                    "발행 실패를 기록할 수 없는 분석 상태입니다. 현재 상태: " + status
+            );
+        }
         this.status = AnalysisStatus.QUEUE_FAILED;
         this.failureStage = AnalysisFailureStage.QUEUE;
         this.failureMessage = message;

@@ -7,6 +7,7 @@ import com.vintic.backend.analyze.domain.VisionAttemptOutcome;
 import com.vintic.backend.common.exception.AnalysisSessionNotFoundException;
 import com.vintic.backend.common.exception.InvalidAnalysisStatusException;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 //  분리된 클래스로 둔다 - 같은 클래스 내 self-invocation은 프록시를 우회한다.)
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class AnalysisFailureRecorder {
 
     private final ProductAnalysisSessionRepository sessionRepository;
@@ -29,10 +31,24 @@ public class AnalysisFailureRecorder {
         sessionRepository.save(session);
     }
 
+    // #130: enqueue 예외는 "메시지가 실제로 발행되지 않았다"를 보장하지 않는다(XADD는 성공했지만
+    // 응답을 못 받은 경우 등 ambiguous 케이스 포함). findByIdForUpdate로 행을 잠그고 최신 상태를
+    // 다시 읽어, 이미 QUEUED를 벗어난 세션(Worker가 이미 가져갔거나 사용자가 취소함)이면
+    // failQueueing()의 가드(ProductAnalysisSession 참고)에 막혀 조용히 건너뛴다 - VisionAttemptCoordinator
+    // 와 동일한 원칙(findByIdForUpdate + 상태 가드), 이 메서드만 REQUIRES_NEW를 유지한다.
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void recordQueueingFailure(Long sessionId, String message) {
-        ProductAnalysisSession session = findSession(sessionId);
-        session.failQueueing(message);
+        ProductAnalysisSession session = sessionRepository.findByIdForUpdate(sessionId).orElse(null);
+        if (session == null) {
+            return;
+        }
+        try {
+            session.failQueueing(message);
+        } catch (InvalidAnalysisStatusException e) {
+            log.info("이미 QUEUED를 벗어난 세션이라 발행 실패를 기록하지 않습니다. analysisId={}, status={}",
+                    sessionId, session.getStatus());
+            return;
+        }
         sessionRepository.save(session);
     }
 

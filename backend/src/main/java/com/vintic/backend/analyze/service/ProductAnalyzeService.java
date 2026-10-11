@@ -47,6 +47,7 @@ public class ProductAnalyzeService {
     private final S3UploaderService s3Service;
     private final ProductAnalysisSessionRepository sessionRepository;
     private final AnalysisFailureRecorder failureRecorder;
+    private final AnalysisQueueCommitter queueCommitter;
     private final AnalysisTaskProducer analysisTaskProducer;
     private final ObjectMapper objectMapper;
     private final S3UrlPresigner s3UrlPresigner;
@@ -77,17 +78,25 @@ public class ProductAnalyzeService {
         session.markImageUploaded(imageUrls);
         sessionRepository.save(session);
 
+        // #130: QUEUED를 Redis 발행 "전"에 별도의 독립 트랜잭션(AnalysisQueueCommitter)으로 커밋한다.
+        // Worker는 enqueue가 호출된 뒤에야 메시지를 받을 수 있으므로, 이 호출이 끝난 뒤에만
+        // enqueue()를 호출하면 Worker가 세션을 읽는 시점에는 항상 QUEUED 이상의 상태만 보인다.
+        // 이 메서드가 반환한 이후로는 이 메서드가 더 이상 세션을 저장하지 않는다 - 발행 뒤에
+        // 오래된 in-memory 엔티티로 다시 save()하면 그 사이 Worker가 진행시킨 상태나 사용자의
+        // CANCELLED를 덮어쓸 수 있기 때문이다.
+        queueCommitter.commitQueued(session.getId());
+
         try {
             analysisTaskProducer.enqueue(new AnalysisTaskMessage(session.getId(), imageUrls, analysisImageUrls));
         } catch (RuntimeException e) {
+            // #130: 이 예외는 "메시지가 발행되지 않았다"를 보장하지 않는다(XADD 응답을 못 받았지만
+            // 서버에는 이미 적재된 경우 등). recordQueueingFailure는 최신 상태를 다시 읽어 이미
+            // QUEUED를 벗어난 세션(Worker가 가져갔거나 취소됨)은 덮어쓰지 않는다.
             recordFailureSafely(() -> failureRecorder.recordQueueingFailure(session.getId(), truncate(e.getMessage())));
             throw e;
         }
 
-        session.markQueued();
-        sessionRepository.save(session);
-
-        return new AnalyzeAcceptedResponse(session.getId(), session.getStatus().name());
+        return new AnalyzeAcceptedResponse(session.getId(), AnalysisStatus.QUEUED.name());
     }
 
     public AnalysisStatusResponse getStatus(Long analysisId, Long userId) {

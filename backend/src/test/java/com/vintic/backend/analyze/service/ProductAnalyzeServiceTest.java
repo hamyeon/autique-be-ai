@@ -23,6 +23,7 @@ import com.vintic.backend.common.util.S3UrlPresigner;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
@@ -38,7 +39,9 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -58,6 +61,9 @@ class ProductAnalyzeServiceTest {
     private AnalysisFailureRecorder failureRecorder;
 
     @Mock
+    private AnalysisQueueCommitter queueCommitter;
+
+    @Mock
     private AnalysisTaskProducer analysisTaskProducer;
 
     @Mock
@@ -67,8 +73,8 @@ class ProductAnalyzeServiceTest {
 
     private ProductAnalyzeService newService() {
         return new ProductAnalyzeService(
-                s3UploaderService, sessionRepository, failureRecorder, analysisTaskProducer, objectMapper,
-                s3UrlPresigner
+                s3UploaderService, sessionRepository, failureRecorder, queueCommitter, analysisTaskProducer,
+                objectMapper, s3UrlPresigner
         );
     }
 
@@ -91,13 +97,40 @@ class ProductAnalyzeServiceTest {
         assertThat(messageCaptor.getValue().analysisId()).isEqualTo(response.analysisId());
         assertThat(messageCaptor.getValue().imageUrls()).isEqualTo(uploadedUrls);
 
+        verify(queueCommitter).commitQueued(response.analysisId());
+
         ArgumentCaptor<ProductAnalysisSession> sessionCaptor = ArgumentCaptor.forClass(ProductAnalysisSession.class);
         verify(sessionRepository, atLeastOnce()).save(sessionCaptor.capture());
-        assertThat(sessionCaptor.getValue().getStatus()).isEqualTo(AnalysisStatus.QUEUED);
         assertThat(sessionCaptor.getValue().getUserId()).isEqualTo(USER_ID);
 
         verify(failureRecorder, never()).recordImageUploadFailure(anyLong(), anyString());
         verify(failureRecorder, never()).recordQueueingFailure(anyLong(), anyString());
+    }
+
+    // #130: QUEUED 커밋(queueCommitter.commitQueued)이 Redis 발행(enqueue)보다 "항상" 먼저
+    // 끝나야 한다 - 이 순서가 깨지면 Worker가 enqueue 직후 세션을 읽었을 때 아직 QUEUED가 아닌
+    // 상태를 볼 수 있다. 실제 커밋 가시성(별도 트랜잭션 간)은 MySQL 환경에서만 의미가 있지만,
+    // "코드가 이 순서로 호출하는지"는 여기서 래치 없이 결정론적으로 검증할 수 있다.
+    @Test
+    void QUEUED_커밋은_Redis_발행보다_항상_먼저_호출된다() {
+        when(sessionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        MultipartFile image = new MockMultipartFile("images", "shoe.jpg", "image/jpeg", new byte[]{1, 2, 3});
+        List<String> uploadedUrls = List.of("https://bucket.s3.amazonaws.com/shoe.jpg");
+        List<S3UploaderService.UploadedImage> uploaded = List.of(new S3UploaderService.UploadedImage(
+                uploadedUrls.get(0), "https://bucket.s3.amazonaws.com/analysis/shoe.jpg"));
+        when(s3UploaderService.uploadImages(List.of(image))).thenReturn(uploaded);
+
+        AnalyzeAcceptedResponse response = newService().submitForAnalysis(List.of(image), USER_ID);
+
+        InOrder order = inOrder(queueCommitter, analysisTaskProducer);
+        order.verify(queueCommitter).commitQueued(response.analysisId());
+        order.verify(analysisTaskProducer).enqueue(any());
+
+        // #130: 발행이 끝난 뒤에는 이 메서드가 더 이상 세션을 저장하지 않는다(create + markImageUploaded
+        // 두 번뿐) - 오래된 in-memory 엔티티로 다시 save()해 Worker가 진행시킨 상태나 CANCELLED를
+        // 덮어쓰는 경로가 없어야 한다.
+        verify(sessionRepository, times(2)).save(any());
     }
 
     @Test
@@ -353,6 +386,7 @@ class ProductAnalyzeServiceTest {
     @Test
     void 이미_취소된_세션을_다시_취소해도_같은_성공_상태를_반환한다() {
         ProductAnalysisSession session = ProductAnalysisSession.create(USER_ID);
+        session.markImageUploaded(List.of("https://bucket.s3.amazonaws.com/shoe.jpg"));
         session.markQueued();
         session.cancel();
         when(sessionRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(session));
@@ -374,6 +408,7 @@ class ProductAnalyzeServiceTest {
     @Test
     void 타인의_세션을_취소하면_존재하지_않는_것과_동일하게_예외를_던지고_상태를_바꾸지_않는다() {
         ProductAnalysisSession session = ProductAnalysisSession.create(USER_ID);
+        session.markImageUploaded(List.of("https://bucket.s3.amazonaws.com/shoe.jpg"));
         session.markQueued();
         when(sessionRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(session));
 
@@ -386,6 +421,7 @@ class ProductAnalyzeServiceTest {
     @Test
     void 이미_상품_등록에_확정_사용된_세션은_취소를_거절한다() {
         ProductAnalysisSession session = ProductAnalysisSession.create(USER_ID);
+        session.markImageUploaded(List.of("https://bucket.s3.amazonaws.com/shoe.jpg"));
         session.markQueued();
         session.claimVisionProcessing("test-token");
         session.completeVision("test-token", "{}");
