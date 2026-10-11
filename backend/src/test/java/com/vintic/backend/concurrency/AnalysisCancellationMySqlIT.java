@@ -6,12 +6,14 @@ import com.vintic.backend.analyze.domain.ProductAnalysisSessionRepository;
 import com.vintic.backend.analyze.domain.VisionAttemptOutcome;
 import com.vintic.backend.analyze.service.AnalysisFailureRecorder;
 import com.vintic.backend.analyze.service.AnalysisProgressRecorder;
+import com.vintic.backend.analyze.service.AnalysisQueueCommitter;
 import com.vintic.backend.analyze.service.PricingAttemptCoordinator;
 import com.vintic.backend.analyze.service.ProductAnalyzeService;
 import com.vintic.backend.analyze.service.VisionAttemptCoordinator;
 import com.vintic.backend.analyze.service.VisionFailureStreamRecorder;
 import com.vintic.backend.ai.vision.dto.VisionProgress;
 import com.vintic.backend.common.exception.AnalysisSessionNotFoundException;
+import com.vintic.backend.common.exception.InvalidAnalysisStatusException;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -65,6 +67,9 @@ class AnalysisCancellationMySqlIT {
     @Autowired
     private PricingAttemptCoordinator pricingCoordinator;
 
+    @Autowired
+    private AnalysisQueueCommitter queueCommitter;
+
     private static final Long USER_ID = 1L;
 
     private Long queuedSessionId() {
@@ -72,6 +77,29 @@ class AnalysisCancellationMySqlIT {
         session.markImageUploaded(java.util.List.of("https://example.com/a.jpg"));
         session.markQueued();
         return sessionRepository.save(session).getId();
+    }
+
+    private Long imageUploadedSessionId() {
+        ProductAnalysisSession session = ProductAnalysisSession.create(USER_ID);
+        session.markImageUploaded(java.util.List.of("https://example.com/a.jpg"));
+        return sessionRepository.save(session).getId();
+    }
+
+    // #130: AnalysisQueueCommitter.commitQueued()가 cancel()과 같은 행 잠금
+    // (findByIdForUpdate)을 쓰는지 검증한다. REQUIRES_NEW는 "독립적으로 커밋된다"만 보장할 뿐
+    // cancel()과의 상호 배제를 보장하지 않으므로, 잠금이 빠지면 이 테스트가 깨진다 - 취소가
+    // 먼저 커밋된 뒤에도 commitQueued()가 QUEUED로 되돌릴 수 있기 때문이다.
+    @Test
+    void 취소가_먼저_커밋되면_QUEUED_전이가_거절되고_CANCELLED가_유지된다() {
+        Long sessionId = imageUploadedSessionId();
+
+        productAnalyzeService.cancel(sessionId, USER_ID);
+
+        assertThatThrownBy(() -> queueCommitter.commitQueued(sessionId))
+                .isInstanceOf(InvalidAnalysisStatusException.class);
+
+        ProductAnalysisSession reloaded = sessionRepository.findById(sessionId).orElseThrow();
+        assertThat(reloaded.getStatus()).isEqualTo(AnalysisStatus.CANCELLED);
     }
 
     @Test

@@ -571,8 +571,22 @@ class AnalysisTaskConsumerTest {
 
     @Test
     void 신규_배달인데_소유권을_확보하지_못하면_Vision을_호출하지_않고_ACK하지_않는다() {
-        // 정상적으로는 도달하지 않는 방어적 경로(claim 대상은 항상 QUEUED뿐이라 경합이 없어야 함).
+        // 정상적으로는 도달하지 않는 방어적 경로 - QUEUED/VISION_PROCESSING 상태에서 가드가
+        // 막혔다는 뜻이라 다른 시도가 이미 소유권을 가져간 경우다.
         when(coordinator.claim(eq(1L), anyString())).thenReturn(VisionAttemptOutcome.OWNERSHIP_LOST);
+
+        newConsumer().onMessage(recordFor(1L, List.of("https://example.com/a.jpg")));
+
+        verify(visionAnalysisService, never()).analyze(any(), any());
+        verify(redisTemplate, never()).opsForStream();
+    }
+
+    // #130: ProductAnalyzeService.submitForAnalysis()가 QUEUED를 커밋한 뒤에만 enqueue하도록
+    // 바뀌었지만, 혹시 그 보장이 깨지는 경우(복제 지연 등)를 대비한 방어선이 실제로 ACK를
+    // 막는지 확인한다 - 이 메시지는 PEL에 남아 기존 회수 정책으로 다시 전달돼야 한다.
+    @Test
+    void 신규_배달인데_세션이_아직_QUEUED_커밋_전이면_Vision을_호출하지_않고_ACK하지_않는다() {
+        when(coordinator.claim(eq(1L), anyString())).thenReturn(VisionAttemptOutcome.NOT_YET_QUEUED);
 
         newConsumer().onMessage(recordFor(1L, List.of("https://example.com/a.jpg")));
 
@@ -679,6 +693,18 @@ class AnalysisTaskConsumerTest {
     @Test
     void 회수_시점에_다른_시도가_이미_소유권을_가지고_있으면_ACK하지_않는다() {
         when(coordinator.reclaim(eq(1L), anyString())).thenReturn(VisionAttemptOutcome.OWNERSHIP_LOST);
+
+        newConsumer().processReclaimed(recordFor(1L, List.of("https://example.com/a.jpg")), 2L);
+
+        verify(visionAnalysisService, never()).analyze(any(), any());
+        verify(redisTemplate, never()).opsForStream();
+    }
+
+    // #130: 회수 시점에도 QUEUED 커밋이 아직 보이지 않을 수 있다(방어선) - ACK하지 않아야
+    // 다음 PEL 스캔에서 다시 회수를 시도할 수 있다.
+    @Test
+    void 회수_시점에도_세션이_아직_QUEUED_커밋_전이면_Vision을_호출하지_않고_ACK하지_않는다() {
+        when(coordinator.reclaim(eq(1L), anyString())).thenReturn(VisionAttemptOutcome.NOT_YET_QUEUED);
 
         newConsumer().processReclaimed(recordFor(1L, List.of("https://example.com/a.jpg")), 2L);
 

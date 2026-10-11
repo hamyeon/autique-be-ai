@@ -57,6 +57,7 @@ class AnalysisCancellationRegistrationRaceMySqlIT {
 
     private Long completedSessionId() {
         ProductAnalysisSession session = ProductAnalysisSession.create(USER_ID);
+        session.markImageUploaded(java.util.List.of("https://example.com/a.jpg"));
         session.markQueued();
         session.claimVisionProcessing("token");
         session.completeVision("token", "{\"brand\":\"Nike\"}");

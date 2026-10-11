@@ -89,6 +89,7 @@ class ProductRegistrationServiceTest {
     // #127: 등록에 쓸 수 있는(아직 취소/등록 확정되지 않은) 분석 세션을 흉내낸다.
     private ProductAnalysisSession registrableSession() {
         ProductAnalysisSession session = ProductAnalysisSession.create(1L);
+        session.markImageUploaded(java.util.List.of("https://example.com/a.jpg"));
         session.markQueued();
         return session;
     }

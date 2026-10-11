@@ -67,10 +67,37 @@ class ProductAnalysisSessionTest {
         assertThat(session.getStatus()).isEqualTo(AnalysisStatus.QUEUED);
     }
 
+    // #130: IMAGE_UPLOADED가 아닌 상태(예: CREATED)에서 markQueued()를 호출하면 막혀야 한다 -
+    // 이 가드가 QUEUED 커밋 전에 이뤄지는 호출이 세션을 잘못 QUEUED로 되돌리는 것을 막는다.
     @Test
-    void 큐_적재가_실패하면_QUEUE_FAILED_상태이고_실패_단계와_메시지가_저장된다() {
+    void IMAGE_UPLOADED가_아닌_상태에서_큐_적재를_시도하면_예외가_발생한다() {
+        ProductAnalysisSession session = ProductAnalysisSession.create(1L);
+
+        assertThatThrownBy(session::markQueued)
+                .isInstanceOf(InvalidAnalysisStatusException.class);
+    }
+
+    // #130: enqueue 예외는 "발행되지 않았다"를 보장하지 않으므로, QUEUED를 벗어난 세션(Worker가
+    // 이미 가져갔거나 사용자가 취소함)에는 발행 실패를 기록하면 안 된다.
+    @Test
+    void QUEUED가_아닌_상태에서_발행_실패_기록을_시도하면_예외가_발생한다() {
         ProductAnalysisSession session = ProductAnalysisSession.create(1L);
         session.markImageUploaded(List.of("https://bucket.s3.amazonaws.com/a.jpg"));
+        session.markQueued();
+        session.claimVisionProcessing(TOKEN_A); // Worker가 이미 가져간 상황
+
+        assertThatThrownBy(() -> session.failQueueing("Redis 연결 실패"))
+                .isInstanceOf(InvalidAnalysisStatusException.class);
+        assertThat(session.getStatus()).isEqualTo(AnalysisStatus.VISION_PROCESSING);
+    }
+
+    @Test
+    void 큐_적재가_실패하면_QUEUE_FAILED_상태이고_실패_단계와_메시지가_저장된다() {
+        // #130: QUEUED를 먼저 커밋한 뒤에만 enqueue하므로, enqueue 실패는 항상 QUEUED 상태에서
+        // 일어난다(ProductAnalyzeService.submitForAnalysis 참고).
+        ProductAnalysisSession session = ProductAnalysisSession.create(1L);
+        session.markImageUploaded(List.of("https://bucket.s3.amazonaws.com/a.jpg"));
+        session.markQueued();
 
         session.failQueueing("Redis 연결 실패");
 
@@ -82,6 +109,7 @@ class ProductAnalysisSessionTest {
     @Test
     void Pricing_요청에_전달한_확정_입력값을_기록할_수_있다() {
         ProductAnalysisSession session = ProductAnalysisSession.create(1L);
+        session.markImageUploaded(List.of("https://bucket.s3.amazonaws.com/a.jpg"));
         session.markQueued();
         session.claimVisionProcessing(TOKEN_A);
         session.completeVision(TOKEN_A, "{}");
@@ -94,6 +122,7 @@ class ProductAnalysisSessionTest {
     @Test
     void QUEUED_상태에서_Vision_시작하면_VISION_PROCESSING_상태이고_token이_저장된다() {
         ProductAnalysisSession session = ProductAnalysisSession.create(1L);
+        session.markImageUploaded(List.of("https://bucket.s3.amazonaws.com/a.jpg"));
         session.markQueued();
 
         session.claimVisionProcessing(TOKEN_A);
@@ -113,6 +142,7 @@ class ProductAnalysisSessionTest {
     @Test
     void 이미_처리된_세션에서_Vision을_다시_시작하면_예외가_발생한다() {
         ProductAnalysisSession session = ProductAnalysisSession.create(1L);
+        session.markImageUploaded(List.of("https://bucket.s3.amazonaws.com/a.jpg"));
         session.markQueued();
         session.claimVisionProcessing(TOKEN_A);
         session.completeVision(TOKEN_A, "{}");
@@ -125,6 +155,7 @@ class ProductAnalysisSessionTest {
     @Test
     void VISION_PROCESSING_상태에서도_reclaim으로_새_token을_받을_수_있다() {
         ProductAnalysisSession session = ProductAnalysisSession.create(1L);
+        session.markImageUploaded(List.of("https://bucket.s3.amazonaws.com/a.jpg"));
         session.markQueued();
         session.claimVisionProcessing(TOKEN_A);
 
@@ -139,6 +170,7 @@ class ProductAnalysisSessionTest {
     void QUEUED_상태에서도_reclaim으로_시작할_수_있다() {
         // Worker가 claim 저장 직전에 죽어 DB가 QUEUED에 머문 채 PEL에만 남은 상황을 흉내낸다.
         ProductAnalysisSession session = ProductAnalysisSession.create(1L);
+        session.markImageUploaded(List.of("https://bucket.s3.amazonaws.com/a.jpg"));
         session.markQueued();
 
         session.reclaimVisionProcessing(TOKEN_A);
@@ -150,6 +182,7 @@ class ProductAnalysisSessionTest {
     @Test
     void 이미_종료된_세션은_reclaim할_수_없다() {
         ProductAnalysisSession session = ProductAnalysisSession.create(1L);
+        session.markImageUploaded(List.of("https://bucket.s3.amazonaws.com/a.jpg"));
         session.markQueued();
         session.claimVisionProcessing(TOKEN_A);
         session.completeVision(TOKEN_A, "{}");
@@ -161,6 +194,7 @@ class ProductAnalysisSessionTest {
     @Test
     void Vision_성공하면_AWAITING_USER_CONFIRMATION_상태이고_결과가_저장되고_token이_비워진다() {
         ProductAnalysisSession session = ProductAnalysisSession.create(1L);
+        session.markImageUploaded(List.of("https://bucket.s3.amazonaws.com/a.jpg"));
         session.markQueued();
         session.claimVisionProcessing(TOKEN_A);
 
@@ -175,6 +209,7 @@ class ProductAnalysisSessionTest {
     void 다른_token으로_Vision_완료를_시도하면_예외가_발생한다() {
         // A가 claim한 뒤 B가 reclaim으로 재선점한 상황에서, A가 뒤늦게 완료를 시도하는 경우.
         ProductAnalysisSession session = ProductAnalysisSession.create(1L);
+        session.markImageUploaded(List.of("https://bucket.s3.amazonaws.com/a.jpg"));
         session.markQueued();
         session.claimVisionProcessing(TOKEN_A);
         session.reclaimVisionProcessing(TOKEN_B);
@@ -189,6 +224,7 @@ class ProductAnalysisSessionTest {
     @Test
     void Vision_실패하면_VISION_FAILED_상태이고_실패_단계와_메시지가_저장되고_token이_비워진다() {
         ProductAnalysisSession session = ProductAnalysisSession.create(1L);
+        session.markImageUploaded(List.of("https://bucket.s3.amazonaws.com/a.jpg"));
         session.markQueued();
         session.claimVisionProcessing(TOKEN_A);
 
@@ -203,6 +239,7 @@ class ProductAnalysisSessionTest {
     @Test
     void 다른_token으로_Vision_실패를_기록하려_하면_예외가_발생한다() {
         ProductAnalysisSession session = ProductAnalysisSession.create(1L);
+        session.markImageUploaded(List.of("https://bucket.s3.amazonaws.com/a.jpg"));
         session.markQueued();
         session.claimVisionProcessing(TOKEN_A);
         session.reclaimVisionProcessing(TOKEN_B);
@@ -216,6 +253,7 @@ class ProductAnalysisSessionTest {
     @Test
     void 분석_중일_때만_잠정_결과를_받고_끝나면_비운다() {
         ProductAnalysisSession session = ProductAnalysisSession.create(1L);
+        session.markImageUploaded(List.of("https://bucket.s3.amazonaws.com/a.jpg"));
         session.markQueued();
         // 분석 시작 전에 온 진행 기록은 버린다
         assertThat(session.recordVisionProgress("{\"completedStages\":1}")).isFalse();
@@ -235,6 +273,7 @@ class ProductAnalysisSessionTest {
     @Test
     void Vision이_실패하면_잠정_결과를_비운다() {
         ProductAnalysisSession session = ProductAnalysisSession.create(1L);
+        session.markImageUploaded(List.of("https://bucket.s3.amazonaws.com/a.jpg"));
         session.markQueued();
         session.claimVisionProcessing(TOKEN_A);
         session.recordVisionProgress("{\"completedStages\":1}");
@@ -247,6 +286,7 @@ class ProductAnalysisSessionTest {
     @Test
     void AWAITING_USER_CONFIRMATION_상태에서_Pricing_시작하면_PRICING_PROCESSING_상태이다() {
         ProductAnalysisSession session = ProductAnalysisSession.create(1L);
+        session.markImageUploaded(List.of("https://bucket.s3.amazonaws.com/a.jpg"));
         session.markQueued();
         session.claimVisionProcessing(TOKEN_A);
         session.completeVision(TOKEN_A, "{}");
@@ -267,6 +307,7 @@ class ProductAnalysisSessionTest {
     @Test
     void 이미_완료된_세션에서_Pricing을_다시_시작하면_예외가_발생한다() {
         ProductAnalysisSession session = ProductAnalysisSession.create(1L);
+        session.markImageUploaded(List.of("https://bucket.s3.amazonaws.com/a.jpg"));
         session.markQueued();
         session.claimVisionProcessing(TOKEN_A);
         session.completeVision(TOKEN_A, "{}");
@@ -280,6 +321,7 @@ class ProductAnalysisSessionTest {
     @Test
     void Pricing_성공하면_COMPLETED_상태이고_결과와_완료시각이_저장된다() {
         ProductAnalysisSession session = ProductAnalysisSession.create(1L);
+        session.markImageUploaded(List.of("https://bucket.s3.amazonaws.com/a.jpg"));
         session.markQueued();
         session.claimVisionProcessing(TOKEN_A);
         session.completeVision(TOKEN_A, "{}");
@@ -295,6 +337,7 @@ class ProductAnalysisSessionTest {
     @Test
     void Pricing_실패하면_PRICING_FAILED_상태이고_실패_단계와_메시지가_저장된다() {
         ProductAnalysisSession session = ProductAnalysisSession.create(1L);
+        session.markImageUploaded(List.of("https://bucket.s3.amazonaws.com/a.jpg"));
         session.markQueued();
         session.claimVisionProcessing(TOKEN_A);
         session.completeVision(TOKEN_A, "{}");
@@ -311,6 +354,7 @@ class ProductAnalysisSessionTest {
     void PRICING_PROCESSING이_아닌_상태에서_completePricing을_호출하면_예외가_발생한다() {
         // #127: 취소되어 PRICING_PROCESSING을 벗어난 뒤 늦게 도착한 Pricing 성공 응답을 흉내낸다.
         ProductAnalysisSession session = ProductAnalysisSession.create(1L);
+        session.markImageUploaded(List.of("https://bucket.s3.amazonaws.com/a.jpg"));
         session.markQueued();
         session.claimVisionProcessing(TOKEN_A);
         session.completeVision(TOKEN_A, "{}");
@@ -326,6 +370,7 @@ class ProductAnalysisSessionTest {
     @Test
     void PRICING_PROCESSING이_아닌_상태에서_failPricing을_호출하면_예외가_발생한다() {
         ProductAnalysisSession session = ProductAnalysisSession.create(1L);
+        session.markImageUploaded(List.of("https://bucket.s3.amazonaws.com/a.jpg"));
         session.markQueued();
         session.claimVisionProcessing(TOKEN_A);
         session.completeVision(TOKEN_A, "{}");
@@ -341,6 +386,7 @@ class ProductAnalysisSessionTest {
     @Test
     void QUEUED_상태의_세션을_취소하면_CANCELLED_상태이고_취소시각이_기록된다() {
         ProductAnalysisSession session = ProductAnalysisSession.create(1L);
+        session.markImageUploaded(List.of("https://bucket.s3.amazonaws.com/a.jpg"));
         session.markQueued();
 
         session.cancel();
@@ -352,6 +398,7 @@ class ProductAnalysisSessionTest {
     @Test
     void VISION_PROCESSING_중에_취소하면_처리_토큰과_진행_결과가_비워진다() {
         ProductAnalysisSession session = ProductAnalysisSession.create(1L);
+        session.markImageUploaded(List.of("https://bucket.s3.amazonaws.com/a.jpg"));
         session.markQueued();
         session.claimVisionProcessing(TOKEN_A);
         session.recordVisionProgress("{\"completedStages\":1}");
@@ -367,6 +414,7 @@ class ProductAnalysisSessionTest {
     void Pricing_완료후에도_등록에_확정_사용되기_전이면_취소할_수_있고_결과가_모두_비워진다() {
         // COMPLETED는 Pricing 완료일 뿐 상품 등록 확정이 아니므로 취소 대상이어야 한다.
         ProductAnalysisSession session = ProductAnalysisSession.create(1L);
+        session.markImageUploaded(List.of("https://bucket.s3.amazonaws.com/a.jpg"));
         session.markQueued();
         session.claimVisionProcessing(TOKEN_A);
         session.completeVision(TOKEN_A, "{\"brand\":\"Nike\"}");
@@ -385,6 +433,7 @@ class ProductAnalysisSessionTest {
     @Test
     void 반복_취소해도_같은_CANCELLED_상태를_유지한다() {
         ProductAnalysisSession session = ProductAnalysisSession.create(1L);
+        session.markImageUploaded(List.of("https://bucket.s3.amazonaws.com/a.jpg"));
         session.markQueued();
         session.cancel();
         var firstCancelledAt = session.getCancelledAt();
@@ -398,6 +447,7 @@ class ProductAnalysisSessionTest {
     @Test
     void 이미_상품_등록에_확정_사용된_세션은_취소할_수_없다() {
         ProductAnalysisSession session = ProductAnalysisSession.create(1L);
+        session.markImageUploaded(List.of("https://bucket.s3.amazonaws.com/a.jpg"));
         session.markQueued();
         session.confirmRegistration();
 
@@ -409,6 +459,7 @@ class ProductAnalysisSessionTest {
     @Test
     void 취소된_세션은_등록에_확정_사용할_수_없다() {
         ProductAnalysisSession session = ProductAnalysisSession.create(1L);
+        session.markImageUploaded(List.of("https://bucket.s3.amazonaws.com/a.jpg"));
         session.markQueued();
         session.cancel();
 
@@ -419,6 +470,7 @@ class ProductAnalysisSessionTest {
     @Test
     void 같은_세션으로_두_번_등록을_확정할_수_없다() {
         ProductAnalysisSession session = ProductAnalysisSession.create(1L);
+        session.markImageUploaded(List.of("https://bucket.s3.amazonaws.com/a.jpg"));
         session.markQueued();
         session.confirmRegistration();
 

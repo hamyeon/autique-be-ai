@@ -36,6 +36,7 @@ class AnalysisFailureRecorderTest {
     @Test
     void 상위_트랜잭션이_롤백되어도_REQUIRES_NEW로_기록한_실패_상태는_커밋된_채로_남는다() {
         ProductAnalysisSession session = ProductAnalysisSession.create(1L);
+        session.markImageUploaded(java.util.List.of("https://example.com/a.jpg"));
         session.markQueued();
         session.claimVisionProcessing("test-token");
         ProductAnalysisSession saved = sessionRepository.save(session);
@@ -54,5 +55,38 @@ class AnalysisFailureRecorderTest {
         ProductAnalysisSession reloaded = sessionRepository.findById(sessionId).orElseThrow();
         assertThat(reloaded.getStatus()).isEqualTo(AnalysisStatus.VISION_FAILED);
         assertThat(reloaded.getFailureMessage()).isEqualTo("OpenAI 호출 실패");
+    }
+
+    // #130: enqueue 예외는 "메시지가 발행되지 않았다"를 보장하지 않는다 - Worker가 이미
+    // claim해 VISION_PROCESSING으로 넘어간 뒤에 뒤늦게 도착한 발행 실패 기록은 무시돼야
+    // 하고(QUEUE_FAILED로 되돌리면 안 됨), claim 이전의 세션은 정상적으로 QUEUE_FAILED로 남아야 한다.
+    @Test
+    void 이미_QUEUED를_벗어난_세션은_발행_실패_기록이_덮어쓰지_않는다() {
+        ProductAnalysisSession session = ProductAnalysisSession.create(1L);
+        session.markImageUploaded(java.util.List.of("https://example.com/a.jpg"));
+        session.markQueued();
+        session.claimVisionProcessing("test-token"); // Worker가 이미 가져간 상황을 흉내낸다.
+        Long sessionId = sessionRepository.save(session).getId();
+
+        failureRecorder.recordQueueingFailure(sessionId, "Redis 응답 타임아웃(실제로는 발행됐을 수 있음)");
+
+        ProductAnalysisSession reloaded = sessionRepository.findById(sessionId).orElseThrow();
+        assertThat(reloaded.getStatus()).isEqualTo(AnalysisStatus.VISION_PROCESSING);
+        assertThat(reloaded.getFailureStage()).isNull();
+        assertThat(reloaded.getFailureMessage()).isNull();
+    }
+
+    @Test
+    void QUEUED_상태의_세션은_발행_실패가_정상적으로_기록된다() {
+        ProductAnalysisSession session = ProductAnalysisSession.create(1L);
+        session.markImageUploaded(java.util.List.of("https://example.com/a.jpg"));
+        session.markQueued();
+        Long sessionId = sessionRepository.save(session).getId();
+
+        failureRecorder.recordQueueingFailure(sessionId, "Redis 연결 실패");
+
+        ProductAnalysisSession reloaded = sessionRepository.findById(sessionId).orElseThrow();
+        assertThat(reloaded.getStatus()).isEqualTo(AnalysisStatus.QUEUE_FAILED);
+        assertThat(reloaded.getFailureMessage()).isEqualTo("Redis 연결 실패");
     }
 }

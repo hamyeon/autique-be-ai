@@ -7,6 +7,7 @@ import com.vintic.backend.analyze.domain.VisionAttemptOutcome;
 import com.vintic.backend.analyze.domain.VisionFailureAttemptResult;
 import com.vintic.backend.common.exception.InvalidAnalysisStatusException;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -22,6 +23,7 @@ import java.util.function.Consumer;
 // 트랜잭션 롤백과 분리)으로 처리하므로 여기서 중복하지 않는다.
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class VisionAttemptCoordinator {
 
     private final ProductAnalysisSessionRepository sessionRepository;
@@ -54,7 +56,10 @@ public class VisionAttemptCoordinator {
         try {
             session.incrementVisionFailureAttemptCount(token);
         } catch (InvalidAnalysisStatusException e) {
-            return new VisionFailureAttemptResult(VisionAttemptOutcome.fromGuardFailure(statusBeforeAttempt), 0);
+            VisionAttemptOutcome outcome = VisionAttemptOutcome.fromGuardFailure(statusBeforeAttempt);
+            log.info("Vision 실패 횟수 기록이 가드에 막혔습니다. sessionId={}, statusBeforeAttempt={}, outcome={}",
+                    sessionId, statusBeforeAttempt, outcome);
+            return new VisionFailureAttemptResult(outcome, 0);
         }
         sessionRepository.save(session);
         return new VisionFailureAttemptResult(VisionAttemptOutcome.COMMITTED, session.getVisionFailureAttemptCount());
@@ -69,7 +74,10 @@ public class VisionAttemptCoordinator {
         try {
             mutation.accept(session);
         } catch (InvalidAnalysisStatusException e) {
-            return VisionAttemptOutcome.fromGuardFailure(statusBeforeAttempt);
+            VisionAttemptOutcome outcome = VisionAttemptOutcome.fromGuardFailure(statusBeforeAttempt);
+            log.info("Vision 처리 시도가 가드에 막혔습니다. sessionId={}, statusBeforeAttempt={}, outcome={}",
+                    sessionId, statusBeforeAttempt, outcome);
+            return outcome;
         }
         sessionRepository.save(session);
         return VisionAttemptOutcome.COMMITTED;
