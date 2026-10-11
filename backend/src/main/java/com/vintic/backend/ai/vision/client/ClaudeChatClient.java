@@ -214,6 +214,12 @@ public class ClaudeChatClient implements ChatCompletionClient {
         );
     }
 
+    // 배포 직후 첫 분석이 클라이언트 생성과 api.anthropic.com TLS 연결 비용을 떠안지 않게 미리 연다(StartupWarmup).
+    // 모델 조회는 토큰을 쓰지 않는 엔드포인트라 비용 없이 연결만 데운다. 설정한 모델 ID가 틀렸으면 여기서 먼저 드러난다.
+    public void warmUp(String model) {
+        client().models().retrieve(model);
+    }
+
     private AnthropicClient client() {
         AnthropicClient existing = client;
         if (existing != null) {
