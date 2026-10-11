@@ -32,6 +32,7 @@ class ProductAnalysisSessionRepositoryTest {
     @Test
     void 완료된_세션의_결과_JSON과_완료시각이_저장된다() {
         ProductAnalysisSession session = ProductAnalysisSession.create(1L);
+        session.markImageUploaded(List.of("https://bucket.s3.amazonaws.com/a.jpg"));
         session.markQueued();
         session.claimVisionProcessing("test-token");
         session.completeVision("test-token", "{\"brand\":\"Nike\"}");
@@ -71,6 +72,7 @@ class ProductAnalysisSessionRepositoryTest {
         // #127: 신규 상태(CANCELLED)와 신규 컬럼(cancelled_at)이 ddl-auto:update로 정상
         // 매핑되는지, 결과 필드 null 처리가 실제로 저장/재조회에서도 유지되는지 확인한다.
         ProductAnalysisSession session = ProductAnalysisSession.create(1L);
+        session.markImageUploaded(List.of("https://bucket.s3.amazonaws.com/a.jpg"));
         session.markQueued();
         session.claimVisionProcessing("test-token");
         session.completeVision("test-token", "{\"brand\":\"Nike\"}");
@@ -89,6 +91,7 @@ class ProductAnalysisSessionRepositoryTest {
     @Test
     void 등록에_확정_사용된_세션의_등록시각이_저장된다() {
         ProductAnalysisSession session = ProductAnalysisSession.create(1L);
+        session.markImageUploaded(List.of("https://bucket.s3.amazonaws.com/a.jpg"));
         session.markQueued();
 
         session.confirmRegistration();

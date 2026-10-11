@@ -108,9 +108,18 @@ public class AnalysisTaskConsumer implements StreamListener<String, MapRecord<St
             }
 
             switch (claimOutcome) {
-                case ALREADY_FINALIZED -> ackAfterEnsuringFailurePublished(record, message.analysisId());
+                case ALREADY_FINALIZED -> {
+                    log.info("신규 배달이지만 이미 종료된 세션이라 Vision을 호출하지 않고 ACK합니다. "
+                            + "analysisId={}, recordId={}", message.analysisId(), record.getId());
+                    ackAfterEnsuringFailurePublished(record, message.analysisId());
+                }
+                // #130: QUEUED 커밋이 아직 이 Worker에게 보이지 않는 상태 - ACK하지 않아야 메시지가
+                // PEL에 남아 기존 회수 정책으로 다시 전달된다(정상 순서에서는 발생하지 않아야 함).
+                case NOT_YET_QUEUED -> log.warn("신규 배달인데 세션이 아직 QUEUED 커밋 전입니다 - ACK하지 않고 "
+                        + "재시도를 기다립니다. analysisId={}, recordId={}", message.analysisId(), record.getId());
                 case OWNERSHIP_LOST ->
-                        log.warn("신규 배달인데 Vision 처리 소유권을 확보하지 못했습니다. analysisId={}", message.analysisId());
+                        log.warn("신규 배달인데 Vision 처리 소유권을 확보하지 못했습니다. analysisId={}, recordId={}",
+                                message.analysisId(), record.getId());
                 case COMMITTED ->
                         processVisionAndFinish(record, message.analysisId(), message.visionImageUrls(), token, 1L);
             }
@@ -144,9 +153,19 @@ public class AnalysisTaskConsumer implements StreamListener<String, MapRecord<St
             }
 
             switch (reclaimOutcome) {
-                case ALREADY_FINALIZED -> ackAfterEnsuringFailurePublished(record, message.analysisId());
+                case ALREADY_FINALIZED -> {
+                    log.info("회수된 메시지지만 이미 종료된 세션이라 Vision을 호출하지 않고 ACK합니다. "
+                            + "analysisId={}, recordId={}", message.analysisId(), record.getId());
+                    ackAfterEnsuringFailurePublished(record, message.analysisId());
+                }
+                // #130: 회수 시점에도 QUEUED 커밋이 아직 보이지 않을 수 있다 - ACK하지 않고
+                // 다음 회수 스캔에 다시 맡긴다.
+                case NOT_YET_QUEUED -> log.warn("회수된 메시지인데 세션이 아직 QUEUED 커밋 전입니다 - ACK하지 않고 "
+                        + "다시 대기시킵니다. analysisId={}, recordId={}, deliveryCount={}",
+                        message.analysisId(), record.getId(), deliveryCount);
                 case OWNERSHIP_LOST ->
-                        log.warn("회수 시점에 이미 다른 시도가 소유권을 가지고 있습니다. analysisId={}", message.analysisId());
+                        log.warn("회수 시점에 이미 다른 시도가 소유권을 가지고 있습니다. analysisId={}, recordId={}",
+                                message.analysisId(), record.getId());
                 case COMMITTED -> {
                     log.info("PEL에서 회수해 Vision 처리를 재시도합니다. analysisId={}, deliveryCount={}",
                             message.analysisId(), deliveryCount);
@@ -215,6 +234,11 @@ public class AnalysisTaskConsumer implements StreamListener<String, MapRecord<St
         switch (attemptResult.outcome()) {
             case OWNERSHIP_LOST ->
                     log.warn("Vision 실패 횟수 기록 시 소유권을 상실했습니다(다른 시도가 이미 재선점함). analysisId={}", sessionId);
+            // #130: claim으로 VISION_PROCESSING에 진입한 뒤라 이 분기에는 실질적으로 도달하지
+            // 않지만, 혹시 도달해도 안전한 기본값(ACK 금지)을 명시해 둔다.
+            case NOT_YET_QUEUED ->
+                    log.warn("Vision 실패 횟수 기록 시 세션이 QUEUED 커밋 전 상태로 확인됐습니다(예상 밖). analysisId={}, recordId={}",
+                            sessionId, record.getId());
             case ALREADY_FINALIZED -> ackAfterEnsuringFailurePublished(record, sessionId);
             case COMMITTED -> {
                 if (attemptResult.attemptCount() < visionProperties.getMaxVisionFailureAttempts()) {
@@ -314,8 +338,8 @@ public class AnalysisTaskConsumer implements StreamListener<String, MapRecord<St
             return false; // DB 저장 자체가 실패 - ack 안 함, 미처리로 남김
         }
 
-        if (outcome == VisionAttemptOutcome.OWNERSHIP_LOST) {
-            log.warn("Vision 완료 저장 시 소유권을 상실했습니다(다른 시도가 이미 재선점함). analysisId={}", sessionId);
+        if (outcome == VisionAttemptOutcome.OWNERSHIP_LOST || outcome == VisionAttemptOutcome.NOT_YET_QUEUED) {
+            log.warn("Vision 완료 저장이 반영되지 않았습니다(outcome={}). analysisId={}", outcome, sessionId);
             return false;
         }
         return true; // COMMITTED 또는 ALREADY_FINALIZED
@@ -330,8 +354,8 @@ public class AnalysisTaskConsumer implements StreamListener<String, MapRecord<St
             return false; // DB 저장 자체가 실패 - ack 안 함, 미처리로 남김
         }
 
-        if (outcome == VisionAttemptOutcome.OWNERSHIP_LOST) {
-            log.warn("Vision 실패 기록 시 소유권을 상실했습니다(다른 시도가 이미 재선점함). analysisId={}", sessionId);
+        if (outcome == VisionAttemptOutcome.OWNERSHIP_LOST || outcome == VisionAttemptOutcome.NOT_YET_QUEUED) {
+            log.warn("Vision 실패 기록이 반영되지 않았습니다(outcome={}). analysisId={}", outcome, sessionId);
             return false;
         }
         if (outcome == VisionAttemptOutcome.COMMITTED) {
