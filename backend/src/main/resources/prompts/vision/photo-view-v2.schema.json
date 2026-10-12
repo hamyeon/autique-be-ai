@@ -1,0 +1,16 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["view", "reason"],
+  "properties": {
+    "view": {
+      "type": "string",
+      "enum": ["side", "front", "back", "top", "outsole", "other"],
+      "description": "Which view of the shoe this single photo shows."
+    },
+    "reason": {
+      "type": "string",
+      "description": "At most 8 English words about what is visible."
+    }
+  }
+}

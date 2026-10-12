@@ -52,7 +52,7 @@ class PhotoViewClassifierTest {
         VisionChatRequest request = lastRequest.get();
         assertThat(request.model()).isEqualTo("claude-haiku-5-5");
         assertThat(request.imageUrls()).singleElement().asString().startsWith("data:image/jpeg;base64,");
-        assertThat(request.responseSchema().name()).isEqualTo("vision_photo_view_v1");
+        assertThat(request.responseSchema().name()).isEqualTo("vision_photo_view_v2");
     }
 
     @Test
