@@ -51,6 +51,12 @@ recommendation:
   vector-backfill-on-startup: false
   vector-backfill-scheduled: false
 
+# #135: 미사용 사진 정리는 API EC2가 전담한다(S3 PutObject 권한이 API 역할에 있고, 사진
+# 업로드 API 자체도 API 프로세스에서 돈다) - 다른 도메인 스케줄러와 같은 이유로 Worker에서는 끈다.
+photo:
+  cleanup:
+    enabled: false
+
 # 배포 직후 첫 요청 지연 완화(StartupWarmup). 기본값(application.yml)은 꺼져 있다.
 startup:
   warmup:

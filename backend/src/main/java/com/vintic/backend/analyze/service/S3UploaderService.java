@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 
 import java.util.ArrayList;
@@ -89,6 +90,33 @@ public class S3UploaderService {
 
     public UploadedImage uploadImage(MultipartFile image) {
         return upload(uniqueFilename(image), image.getContentType(), readBytes(image));
+    }
+
+    // #135: 미사용 사진 정리(PhotoCleanupService) 전용. url이 가리키는 객체를 지운다 - 호출부가
+    // 삭제 전 "아직 미사용인지"를 행 잠금 아래서 이미 확인했다는 전제다. 실패하면 예외를 던져
+    // 그대로 트랜잭션이 롤백되게 한다 - DB 행이 남아있으면 다음 정리 주기에 같은 사진이 다시
+    // 후보로 잡혀 자연스럽게 재시도된다(별도 재시도 상태를 두지 않는다).
+    public void deleteObjects(List<String> urls) {
+        for (String url : urls) {
+            if (url == null) {
+                continue;
+            }
+            try {
+                s3Client.deleteObject(DeleteObjectRequest.builder()
+                        .bucket(bucket)
+                        .key(extractKey(url))
+                        .build());
+            } catch (Exception e) {
+                throw new S3UploadException("S3 이미지 삭제 중 문제가 발생했습니다.");
+            }
+        }
+    }
+
+    // putObject()가 조립하는 URL 형식과 짝을 이룬다 - key를 별도로 들고 다니지 않고 URL에서
+    // 되짚어 낸다(S3UploaderService가 현재 외부로 key를 노출하지 않으므로).
+    private String extractKey(String url) {
+        String prefix = "https://" + bucket + ".s3.ap-northeast-2.amazonaws.com/";
+        return url.startsWith(prefix) ? url.substring(prefix.length()) : url;
     }
 
     private UploadedImage upload(String uniqueFilename, String contentType, byte[] source) {

@@ -7,8 +7,11 @@ import com.vintic.backend.ai.vision.dto.VisionDefect;
 import com.vintic.backend.ai.vision.dto.VisionProgress;
 import com.vintic.backend.analyze.domain.AnalysisFailureStage;
 import com.vintic.backend.analyze.domain.AnalysisStatus;
+import com.vintic.backend.analyze.domain.PhotoMatchStatus;
+import com.vintic.backend.analyze.domain.PhotoSlot;
 import com.vintic.backend.analyze.domain.ProductAnalysisSession;
 import com.vintic.backend.analyze.domain.ProductAnalysisSessionRepository;
+import com.vintic.backend.analyze.domain.ProductPhoto;
 import com.vintic.backend.analyze.dto.AnalysisStatusResponse;
 import com.vintic.backend.analyze.dto.AnalyzeAcceptedResponse;
 import com.vintic.backend.analyze.dto.AnalyzeCancelResponse;
@@ -18,6 +21,8 @@ import com.vintic.backend.common.exception.AnalysisQueueException;
 import com.vintic.backend.common.exception.AnalysisSessionNotFoundException;
 import com.vintic.backend.common.exception.InvalidAnalysisStatusException;
 import com.vintic.backend.common.exception.InvalidImageException;
+import com.vintic.backend.common.exception.InvalidPhotoSelectionException;
+import com.vintic.backend.common.exception.PhotoAlreadyUsedException;
 import com.vintic.backend.common.exception.S3UploadException;
 import com.vintic.backend.common.util.S3UrlPresigner;
 import org.junit.jupiter.api.Test;
@@ -37,6 +42,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
@@ -69,13 +75,22 @@ class ProductAnalyzeServiceTest {
     @Mock
     private S3UrlPresigner s3UrlPresigner;
 
+    @Mock
+    private PhotoUsageCommitter photoUsageCommitter;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     private ProductAnalyzeService newService() {
         return new ProductAnalyzeService(
                 s3UploaderService, sessionRepository, failureRecorder, queueCommitter, analysisTaskProducer,
-                objectMapper, s3UrlPresigner
+                objectMapper, s3UrlPresigner, photoUsageCommitter
         );
+    }
+
+    private ProductPhoto photoWith(Long id, PhotoSlot slot, String originalUrl, String analysisUrl) {
+        ProductPhoto photo = ProductPhoto.create(USER_ID, slot, originalUrl, analysisUrl, PhotoMatchStatus.MATCH, slot.name());
+        org.springframework.test.util.ReflectionTestUtils.setField(photo, "id", id);
+        return photo;
     }
 
     @Test
@@ -204,6 +219,80 @@ class ProductAnalyzeServiceTest {
         assertThatThrownBy(() -> newService().submitForAnalysis(List.of(image), USER_ID))
                 .isInstanceOf(AnalysisQueueException.class)
                 .hasMessage("원래 Queue 실패");
+    }
+
+    // #135: photoIds 경로 ------------------------------------------------------------------
+
+    @Test
+    void photoIds_분석_요청도_QUEUED_상태로_202_응답을_반환하고_slot_순서대로_이미지_URL을_구성한다() {
+        when(sessionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        ProductPhoto front = photoWith(2L, PhotoSlot.FRONT, "https://bucket/front.jpg", "https://bucket/analysis/front.jpg");
+        ProductPhoto side = photoWith(1L, PhotoSlot.SIDE, "https://bucket/side.jpg", "https://bucket/analysis/side.jpg");
+        ProductPhoto outsole = photoWith(3L, PhotoSlot.OUTSOLE, "https://bucket/outsole.jpg", "https://bucket/analysis/outsole.jpg");
+        // 일부러 slot 선언 순서(SIDE, FRONT, OUTSOLE)와 다르게 반환해도 정렬되는지 확인한다.
+        when(photoUsageCommitter.claimPhotos(eq(List.of(2L, 1L, 3L)), eq(USER_ID), any()))
+                .thenReturn(List.of(front, outsole, side));
+
+        AnalyzeAcceptedResponse response = newService().submitForAnalysisByPhotoIds(List.of(2L, 1L, 3L), USER_ID);
+
+        assertThat(response.status()).isEqualTo("QUEUED");
+
+        ArgumentCaptor<AnalysisTaskMessage> messageCaptor = ArgumentCaptor.forClass(AnalysisTaskMessage.class);
+        verify(analysisTaskProducer).enqueue(messageCaptor.capture());
+        assertThat(messageCaptor.getValue().imageUrls()).containsExactly(
+                "https://bucket/side.jpg", "https://bucket/front.jpg", "https://bucket/outsole.jpg");
+
+        verify(queueCommitter).commitQueued(response.analysisId());
+    }
+
+    @Test
+    void photoIds가_비어있으면_InvalidPhotoSelectionException을_던진다() {
+        assertThatThrownBy(() -> newService().submitForAnalysisByPhotoIds(List.of(), USER_ID))
+                .isInstanceOf(InvalidPhotoSelectionException.class);
+
+        verify(sessionRepository, never()).save(any());
+    }
+
+    @Test
+    void 중복된_photoId가_있으면_InvalidPhotoSelectionException을_던진다() {
+        assertThatThrownBy(() -> newService().submitForAnalysisByPhotoIds(List.of(1L, 1L, 2L), USER_ID))
+                .isInstanceOf(InvalidPhotoSelectionException.class);
+
+        verify(sessionRepository, never()).save(any());
+        verify(photoUsageCommitter, never()).claimPhotos(any(), any(), any());
+    }
+
+    @Test
+    void 사진_사용_처리가_실패하면_실패_기록을_남기고_예외를_그대로_던지며_큐_적재는_호출되지_않는다() {
+        when(sessionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        when(photoUsageCommitter.claimPhotos(eq(List.of(1L, 2L, 3L)), eq(USER_ID), any()))
+                .thenThrow(new PhotoAlreadyUsedException("이미 다른 분석에 사용된 사진이 포함되어 있습니다."));
+
+        assertThatThrownBy(() -> newService().submitForAnalysisByPhotoIds(List.of(1L, 2L, 3L), USER_ID))
+                .isInstanceOf(PhotoAlreadyUsedException.class);
+
+        // S3 업로드 실패와 같은 보상 경로(recordImageUploadFailure)를 그대로 재사용한다.
+        verify(failureRecorder).recordImageUploadFailure(any(), anyString());
+        verify(queueCommitter, never()).commitQueued(any());
+        verify(analysisTaskProducer, never()).enqueue(any());
+    }
+
+    // #130: photoIds 경로도 멀티파트 경로와 똑같이 commitQueued가 enqueue보다 항상 먼저
+    // 끝나야 한다 - 공통 꼬리(commitImagesAndEnqueue)를 추출하면서 이 순서가 깨지지 않았는지 확인한다.
+    @Test
+    void photoIds_경로도_QUEUED_커밋이_Redis_발행보다_항상_먼저_호출된다() {
+        when(sessionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        ProductPhoto side = photoWith(1L, PhotoSlot.SIDE, "https://bucket/side.jpg", "https://bucket/analysis/side.jpg");
+        ProductPhoto front = photoWith(2L, PhotoSlot.FRONT, "https://bucket/front.jpg", "https://bucket/analysis/front.jpg");
+        ProductPhoto outsole = photoWith(3L, PhotoSlot.OUTSOLE, "https://bucket/outsole.jpg", "https://bucket/analysis/outsole.jpg");
+        when(photoUsageCommitter.claimPhotos(eq(List.of(1L, 2L, 3L)), eq(USER_ID), any()))
+                .thenReturn(List.of(side, front, outsole));
+
+        AnalyzeAcceptedResponse response = newService().submitForAnalysisByPhotoIds(List.of(1L, 2L, 3L), USER_ID);
+
+        InOrder order = inOrder(queueCommitter, analysisTaskProducer);
+        order.verify(queueCommitter).commitQueued(response.analysisId());
+        order.verify(analysisTaskProducer).enqueue(any());
     }
 
     @Test

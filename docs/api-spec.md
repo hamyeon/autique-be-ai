@@ -61,6 +61,7 @@ Base URL : http://44.193.0.36:8080
 | 400 | 40002 | 이미지 파일 없음 |
 | 400 | 40003 | 잘못된 분석 상태에서의 요청 |
 | 400 | 40004 | 필수 요청 헤더 누락 |
+| 400 | 40007 | photoIds 요청 자체가 잘못됨(중복 photoId/slot, 필수 slot 누락) |
 | 401 | 40101 | `X-User-Id` 헤더 누락 / 형식 오류 / 존재하지 않는 사용자 |
 | 403 | 40301 | 판매자 본인 입찰 시도 |
 | 403 | 40302 | 입찰 제한(패널티) 기간 중인 사용자의 입찰 시도 |
@@ -71,6 +72,7 @@ Base URL : http://44.193.0.36:8080
 | 404 | 40403 | 존재하지 않는 차순위 제안 |
 | 404 | 40404 | 등록된 자동입찰 없음 |
 | 404 | 40408 | 존재하지 않는 분석 세션 |
+| 404 | 40409 | 존재하지 않는 photoId, 또는 타인 소유의 photoId |
 | 409 | 40901 | 이미 현재 최고입찰자인 사용자의 추가 입찰 시도 |
 | 409 | 40902 | 아직 시작되지 않은 경매에 대한 입찰 시도 |
 | 409 | 40903 | 종료/취소된 경매에 대한 입찰 시도 |
@@ -85,6 +87,7 @@ Base URL : http://44.193.0.36:8080
 | 409 | 40912 | 이미 처리된 차순위 제안에 재시도 |
 | 409 | 40913 | 입찰 금액이 입찰 단위 배수가 아님 |
 | 409 | 40914 | 결제 완료 후 낙찰 포기 시도 |
+| 409 | 40923 | 이미 다른 분석에 사용된 photoId로 재요청 |
 | 500 | 50001 | 서버 내부 오류 |
 | 500 | 50002 | S3 이미지 업로드 실패 |
 | 500 | 50003 | AI(OpenAI) 통신 오류 |
@@ -210,6 +213,114 @@ GET /api/products/analyze/1
 S3 이미지 업로드 이후 AI 분석 작업을 비동기 Queue에 등록하는 과정에서 오류가 발생한 경우 반환됩니다.
 
 공통 응답 DTO를 적용하여 모든 응답을 `success`, `data`, `error` 형식으로 반환합니다. 성공적으로 분석 요청이 접수된 경우 `status`는 `QUEUED`이며, 이후 실제 분석 상태 및 결과는 `GET /api/products/analyze/{taskId}` API를 통해 확인합니다.
+
+---
+
+# API 상세 설명
+
+`POST /api/products/photos`
+
+사진 한 장을 칸(slot)에 넣는 즉시 S3에 저장하고 AI가 촬영 면을 판정하는 API입니다("사진 선업로드"). 판정 결과는 안내용이며, `MISMATCH`/`UNKNOWN`이어도 이후 분석 요청을 막지 않습니다.
+
+## Request ✔️
+
+### Request Header
+
+```
+Content-Type: multipart/form-data
+Authorization: Bearer {accessToken}
+```
+
+### Request Body
+
+`multipart/form-data`
+
+| 파트명 | 타입 | 설명 |
+| --- | --- | --- |
+| `image` | `file` | 판정·업로드할 사진 1장 |
+| `slot` | 텍스트 | `SIDE` \| `FRONT` \| `OUTSOLE` \| `DEFECT` 중 하나 |
+
+`DEFECT`는 판정을 생략합니다(`check`/`detectedView`/`message`가 모두 `null`로 내려갑니다).
+
+## Response ✔️
+
+### Success ✅
+
+### 200 OK - 업로드 및 판정 성공
+
+```json
+{
+  "success": true,
+  "data": {
+    "photoId": 123,
+    "slot": "OUTSOLE",
+    "check": "MISMATCH",
+    "detectedView": "SIDE",
+    "message": "밑창이 보이게 신발을 뒤집어 찍어주세요."
+  },
+  "error": null
+}
+```
+
+- `check`: `MATCH` / `MISMATCH` / `UNKNOWN` / `null`(DEFECT)
+- `detectedView`: AI가 실제로 판정한 면(`SIDE`/`FRONT`/`BACK`/`TOP`/`OUTSOLE`/`OTHER`). 판정 생략·실패 시 `null`
+- `message`: 불일치 시 보여줄 안내 문구. `MATCH`/`UNKNOWN`/`DEFECT`는 `null`
+- AI 판정 호출이 실패(API 오류·타임아웃·응답 파싱 실패)해도 `check`는 `UNKNOWN`으로 내려가며 업로드 자체는 그대로 성공합니다. S3 업로드나 사진 메타데이터 저장이 실패하면 이 API는 500으로 응답합니다(아래 실패 응답 참고).
+
+### Failure ❌
+
+이미지 파일이 없으면 `40002`, S3 업로드 실패는 `50002`, AI 통신 오류(판정 실패를 UNKNOWN으로 접지 못할 정도의 내부 오류)는 `50003`를 그대로 따릅니다(기존 `/analyze`와 동일한 에러 코드 재사용).
+
+---
+
+# API 상세 설명
+
+`POST /api/products/analyze` (photoIds)
+
+기존 multipart 요청(`images`)과 같은 경로를 쓰며, `Content-Type`으로 구분되는 또 다른 요청 형태입니다. `POST /api/products/photos`로 미리 올려 둔 사진들의 `photoId`로 분석을 시작합니다.
+
+## Request ✔️
+
+### Request Header
+
+```
+Content-Type: application/json
+Authorization: Bearer {accessToken}
+```
+
+### Request Body
+
+```json
+{
+  "photoIds": [123, 124, 125]
+}
+```
+
+## Response ✔️
+
+응답은 기존 multipart 요청과 완전히 동일합니다 - `202 Accepted` + `analysisId` + `status: "QUEUED"`. 이후 `GET /api/products/analyze/{taskId}` 폴링도 그대로 재사용합니다.
+
+### 검증 규칙
+
+- `photoIds`가 비어 있거나 중복된 id가 포함되면 `40007`
+- 요청에 포함된 사진들의 slot이 중복되거나(같은 slot이 두 번 이상) `SIDE`/`FRONT`/`OUTSOLE`이 하나라도 빠지면 `40007`(`DEFECT`는 선택)
+- 존재하지 않는 photoId, 또는 로그인한 사용자 소유가 아닌 photoId가 포함되면 `40409`(타인 소유 여부는 "없음"과 구분해 노출하지 않습니다)
+- 이미 다른 분석 요청에 사용된 photoId가 포함되면 `40923`
+- 같은 photoId로 동시에 분석을 요청해도 한쪽만 성공하고 나머지는 `40923`으로 거절됩니다(서버가 행 단위로 보장)
+- `MISMATCH`/`UNKNOWN` 판정이었던 사진도 분석 요청을 막지 않습니다
+
+### Failure ❌
+
+```json
+{
+  "success": false,
+  "data": null,
+  "error": {
+    "code": 40923,
+    "message": "이미 다른 분석에 사용된 사진이 포함되어 있습니다."
+  }
+}
+```
 
 ---
 
