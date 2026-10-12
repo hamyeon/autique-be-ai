@@ -50,3 +50,8 @@ purchase-agent:
 recommendation:
   vector-backfill-on-startup: false
   vector-backfill-scheduled: false
+
+# 배포 직후 첫 요청 지연 완화(StartupWarmup). 기본값(application.yml)은 꺼져 있다.
+startup:
+  warmup:
+    enabled: ${STARTUP_WARMUP_ENABLED:true}

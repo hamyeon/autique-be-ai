@@ -324,6 +324,12 @@ jwt:
 cors:
   allowed-origins: ${CORS_ALLOWED_ORIGINS:}
 
+# 배포 직후 첫 상품 등록이 느린 문제 - 기동 직후 이미지 축소·S3·Claude 연결을 미리 열어둔다(StartupWarmup).
+# 외부 호출이 나가므로 기본은 꺼두고 배포 profile(api, worker)에서만 켠다. 테스트 컨텍스트가 S3/Claude를 부르지 않게 하려는 것이다.
+startup:
+  warmup:
+    enabled: ${STARTUP_WARMUP_ENABLED:false}
+
 ---
 # #75-4B: local/test(그리고 profile을 지정하지 않는 대부분의 @WebMvcTest 슬라이스, on-profile
 # "!dev & !prod"에 해당)에서는 spring-boot-starter-security(#75-4A에서 JWT primitive용으로 추가)의
