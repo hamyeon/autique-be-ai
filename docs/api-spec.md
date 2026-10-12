@@ -4,7 +4,15 @@
 
 ## 배포 서버 정보
 
-Base URL : http://44.193.0.36:8080
+시연 환경은 Caddy가 자동 발급한 Let's Encrypt 인증서로 **HTTPS**만 공개합니다. 평문 HTTP(8080)는 외부에 노출되지 않습니다.
+
+```
+Base URL : https://<api-공인IP-하이픈>.sslip.io
+```
+
+예: 공인 IP가 `3.34.56.78`이면 `https://3-34-56-78.sslip.io`.
+
+고정 도메인·Elastic IP를 쓰지 않으므로 **EC2를 중지했다가 다시 시작하면 공인 IP가 바뀌고 Base URL도 함께 바뀝니다.** 현재 유효한 주소는 배포 담당자에게 확인하세요(배포 절차는 `docs/aws-demo-deployment.md` 참고). 로컬 개발 환경은 `http://localhost:8080`을 사용합니다.
 
 ## 공통 응답 형식
 
@@ -31,11 +39,20 @@ Base URL : http://44.193.0.36:8080
 }
 ```
 
-## 인증 (`X-User-Id`)
+## 인증
 
-로그인한 사용자를 식별해야 하는 API에만 `X-User-Id` 헤더가 필요합니다. 실제 로그인 연동 전까지 사용하는 mock 인증이며, 헤더 값은 `users` 테이블에 존재하는 사용자 ID여야 합니다.
+인증 방식은 **실행 환경(Spring profile)에 따라 다릅니다.** 어느 환경이든 "인증이 필요한 API"의 목록과 성공/실패 동작은 동일하고, 사용자를 식별하는 **헤더만** 달라집니다.
 
-| API | 헤더 |
+| 환경 (profile) | 인증 방식 | 헤더 |
+| --- | --- | --- |
+| **dev / prod** (배포 서버) | 카카오 로그인으로 발급받은 **JWT Access Token** | `Authorization: Bearer {accessToken}` |
+| **local** (로컬 개발) | `X-User-Id` **mock 인증** (헤더 값은 `users` 테이블에 존재하는 사용자 ID) | `X-User-Id: {userId}` |
+
+> 아래 개별 API 설명의 요청 예시에 `Authorization: Bearer ...` 또는 `X-User-Id: ...` 중 하나만 적혀 있어도, 실제로는 위 표에 따라 **실행 환경에 맞는 헤더**를 사용하면 됩니다. 두 헤더는 모두 서버 내부에서 동일한 "현재 사용자(currentUserId)"로 해석됩니다.
+
+인증이 필요한지 여부는 API마다 다음과 같습니다.
+
+| API | 인증 |
 | --- | --- |
 | `POST /api/auctions/{id}/bids` (입찰) | **필수** |
 | `POST` / `GET` / `PATCH` / `DELETE /api/auctions/{id}/auto-bids/me` (자동입찰) | **필수** |
@@ -45,13 +62,14 @@ Base URL : http://44.193.0.36:8080
 | `GET /api/auctions/{id}/live` (실시간 경매) | **필수** |
 | `GET /api/auctions/{id}/auto-bid/recommendation` | **필수** |
 | `GET` / `POST /api/backup-offers/...` (차순위) | **필수** |
+| `POST /api/products/analyze` (이미지·photoIds 분석), `POST /api/products/photos` (사진 선업로드), `GET /api/products/analyze/{taskId}` (분석 조회), `POST /api/products/calculate-price` (가격 계산), `POST /api/products` (상품 등록) | **필수** |
 | `GET /api/auctions/{id}` (경매 상세) | 선택 — 있으면 조회 로그를 남깁니다 |
 | `GET /api/auctions/{id}/bids` (입찰 이력) | 선택 |
 | `GET /api/auctions/{id}/similar` (비슷한 상품) | 선택 — 있으면 찜 여부를 함께 내려줍니다 |
 | `GET /api/recommendations/auctions` (추천) | 선택 — 없으면 Fallback 결과 |
-| 그 외 (`/api/products/...`) | 불필요 |
+| `GET /api/products` (상품 목록), `GET /api/curations` (큐레이션) | 불필요 |
 
-헤더가 없거나, 숫자가 아니거나, 존재하지 않는 사용자 ID인 경우 `401 Unauthorized`(`40101`)를 반환합니다.
+인증에 실패한 경우(**dev/prod**: `Authorization` 헤더 누락·토큰 만료·서명 불일치 등 / **local**: `X-User-Id` 헤더 누락·숫자가 아님·존재하지 않는 사용자 ID) 모두 `401 Unauthorized`(`40101`)를 반환합니다.
 
 ## 에러 코드 정리
 
@@ -62,7 +80,7 @@ Base URL : http://44.193.0.36:8080
 | 400 | 40003 | 잘못된 분석 상태에서의 요청 |
 | 400 | 40004 | 필수 요청 헤더 누락 |
 | 400 | 40007 | photoIds 요청 자체가 잘못됨(중복 photoId/slot, 필수 slot 누락) |
-| 401 | 40101 | `X-User-Id` 헤더 누락 / 형식 오류 / 존재하지 않는 사용자 |
+| 401 | 40101 | 인증 실패 (dev/prod: `Authorization: Bearer` 누락·토큰 만료·서명 불일치 / local: `X-User-Id` 헤더 누락·형식 오류·존재하지 않는 사용자) |
 | 403 | 40301 | 판매자 본인 입찰 시도 |
 | 403 | 40302 | 입찰 제한(패널티) 기간 중인 사용자의 입찰 시도 |
 | 403 | 40303 | 낙찰자가 아닌 사용자의 낙찰 포기 시도 |
@@ -1259,9 +1277,7 @@ Content-Type: application/json
 X-User-Id: 2
 ```
 
-`X-User-Id`는 현재 입찰자를 식별하기 위해 사용하는 mock 인증 헤더입니다.
-
-전달한 값은 `users` 테이블에 실제로 존재하는 사용자 ID여야 합니다.
+`X-User-Id`는 **local 환경**에서 입찰자를 식별하는 mock 인증 헤더입니다(전달한 값은 `users` 테이블에 실제로 존재하는 사용자 ID여야 합니다). **dev/prod 배포 환경에서는 `Authorization: Bearer {accessToken}`**를 대신 사용합니다 — 위 "인증" 섹션 참고.
 
 ### Request Body
 
