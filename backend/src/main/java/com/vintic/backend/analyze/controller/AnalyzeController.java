@@ -1,8 +1,12 @@
 package com.vintic.backend.analyze.controller;
 
+import com.vintic.backend.analyze.domain.PhotoSlot;
 import com.vintic.backend.analyze.dto.AnalysisStatusResponse;
 import com.vintic.backend.analyze.dto.AnalyzeAcceptedResponse;
+import com.vintic.backend.analyze.dto.AnalyzeByPhotoIdsRequest;
 import com.vintic.backend.analyze.dto.AnalyzeCancelResponse;
+import com.vintic.backend.analyze.dto.PhotoUploadResponse;
+import com.vintic.backend.analyze.service.PhotoUploadService;
 import com.vintic.backend.analyze.service.ProductAnalyzeService;
 import com.vintic.backend.common.dto.ApiResponse;
 import lombok.RequiredArgsConstructor;
@@ -22,6 +26,7 @@ import java.util.List;
 public class AnalyzeController {
 
     private final ProductAnalyzeService productAnalyzeService;
+    private final PhotoUploadService photoUploadService;
 
     @PostMapping(value = "/analyze", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<ApiResponse<AnalyzeAcceptedResponse>> analyzeImage(
@@ -31,6 +36,28 @@ public class AnalyzeController {
         // 에러나면 서비스가 알아서 던지고 Advice가 알아서 처리함
         AnalyzeAcceptedResponse response = productAnalyzeService.submitForAnalysis(images, userId);
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(ApiResponse.success(response));
+    }
+
+    // #135: 기존 multipart 요청과 같은 경로를 쓰되 consumes로 구분한다 - 이미 업로드해 둔
+    // photoId로 분석을 시작한다(사진 선업로드 화면). 기존 multipart 엔드포인트는 그대로 둔다.
+    @PostMapping(value = "/analyze", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<ApiResponse<AnalyzeAcceptedResponse>> analyzeByPhotoIds(
+            @RequestBody AnalyzeByPhotoIdsRequest request,
+            @RequestAttribute("currentUserId") Long userId
+    ) {
+        AnalyzeAcceptedResponse response = productAnalyzeService.submitForAnalysisByPhotoIds(request.photoIds(), userId);
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(ApiResponse.success(response));
+    }
+
+    // #135: 사진 한 장을 칸(slot)에 넣는 즉시 S3 업로드 + 촬영 면 판정을 수행한다("사진 선업로드").
+    @PostMapping(value = "/photos", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<ApiResponse<PhotoUploadResponse>> uploadPhoto(
+            @RequestPart("image") MultipartFile image,
+            @RequestParam("slot") PhotoSlot slot,
+            @RequestAttribute("currentUserId") Long userId
+    ) {
+        PhotoUploadResponse response = photoUploadService.upload(image, slot, userId);
+        return ResponseEntity.ok(ApiResponse.success(response));
     }
 
     @GetMapping("/analyze/{taskId}")

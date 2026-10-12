@@ -132,6 +132,28 @@ public class GlobalExceptionHandler {
                 .body(ApiResponse.fail(50004, e.getMessage()));
     }
 
+    // #135: photoIds 요청 자체가 잘못됨 - 중복 photoId/slot, 필수 slot(SIDE/FRONT/OUTSOLE) 누락 (400 Bad Request)
+    @ExceptionHandler(InvalidPhotoSelectionException.class)
+    public ResponseEntity<ApiResponse<Void>> handleInvalidPhotoSelectionException(InvalidPhotoSelectionException e) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.fail(40007, e.getMessage()));
+    }
+
+    // #135: 존재하지 않는 photoId, 또는 타인 소유의 photoId (404 Not Found) - AnalysisSessionNotFoundException과
+    // 같은 이유로 "없음"과 "내 것이 아님"을 구분하지 않는다.
+    @ExceptionHandler(PhotoNotFoundException.class)
+    public ResponseEntity<ApiResponse<Void>> handlePhotoNotFoundException(PhotoNotFoundException e) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ApiResponse.fail(40409, e.getMessage()));
+    }
+
+    // #135: 이미 다른 분석에 사용된 사진으로 다시 분석을 요청함 (409 Conflict)
+    @ExceptionHandler(PhotoAlreadyUsedException.class)
+    public ResponseEntity<ApiResponse<Void>> handlePhotoAlreadyUsedException(PhotoAlreadyUsedException e) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiResponse.fail(40923, e.getMessage()));
+    }
+
     // 존재하지 않는 경매 조회 (404 Not Found)
     // #46: FINAL contract §0-A는 40401=AUCTION_NOT_FOUND, 40402=ORDER_NOT_FOUND로 확정한다.
     // Order 도메인이 아직 없어 40402가 다른 예외에 점유되지 않은 상태를 확인한 뒤 40402→40401로

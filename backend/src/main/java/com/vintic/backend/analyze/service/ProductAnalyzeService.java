@@ -7,6 +7,7 @@ import com.vintic.backend.ai.vision.dto.VisionProgress;
 import com.vintic.backend.analyze.domain.AnalysisStatus;
 import com.vintic.backend.analyze.domain.ProductAnalysisSession;
 import com.vintic.backend.analyze.domain.ProductAnalysisSessionRepository;
+import com.vintic.backend.analyze.domain.ProductPhoto;
 import com.vintic.backend.analyze.dto.AnalysisStatusResponse;
 import com.vintic.backend.analyze.dto.AnalyzeAcceptedResponse;
 import com.vintic.backend.analyze.dto.AnalyzeCancelResponse;
@@ -14,6 +15,7 @@ import com.vintic.backend.analyze.queue.AnalysisTaskMessage;
 import com.vintic.backend.analyze.queue.AnalysisTaskProducer;
 import com.vintic.backend.common.exception.AnalysisSessionNotFoundException;
 import com.vintic.backend.common.exception.InvalidImageException;
+import com.vintic.backend.common.exception.InvalidPhotoSelectionException;
 import com.vintic.backend.common.util.S3UrlPresigner;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -22,7 +24,10 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.time.Duration;
+import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 // 이미지 검증 -> S3 업로드 -> Queue 적재까지만 담당하는 오케스트레이터(Producer 쪽).
 // 실제 Vision 분석은 이 서비스가 아니라 AnalysisTaskConsumer가 큐 메시지를 받아 비동기로 처리한다.
@@ -51,6 +56,7 @@ public class ProductAnalyzeService {
     private final AnalysisTaskProducer analysisTaskProducer;
     private final ObjectMapper objectMapper;
     private final S3UrlPresigner s3UrlPresigner;
+    private final PhotoUsageCommitter photoUsageCommitter;
 
     public AnalyzeAcceptedResponse submitForAnalysis(List<MultipartFile> imageFiles, Long userId) {
 
@@ -75,15 +81,59 @@ public class ProductAnalyzeService {
         List<String> imageUrls = uploaded.stream().map(S3UploaderService.UploadedImage::originalUrl).toList();
         List<String> analysisImageUrls = uploaded.stream().map(S3UploaderService.UploadedImage::analysisUrl).toList();
 
+        return commitImagesAndEnqueue(session, imageUrls, analysisImageUrls);
+    }
+
+    // #135: photoIds 분석 요청. 이미 선업로드된 사진(ProductPhoto)의 originalUrl/analysisUrl을
+    // 기존 multipart 경로의 imageUrls/analysisImageUrls 자리에 그대로 꽂아 넣는다 - S3 업로드
+    // 단계만 photoUsageCommitter.claimPhotos()의 "사용 처리"로 바뀌고, 그 이후(markImageUploaded
+    // -> commitQueued -> enqueue)는 submitForAnalysis()와 완전히 같은 코드 경로를 탄다.
+    public AnalyzeAcceptedResponse submitForAnalysisByPhotoIds(List<Long> photoIds, Long userId) {
+        if (photoIds == null || photoIds.isEmpty()) {
+            throw new InvalidPhotoSelectionException("photoIds가 비어 있습니다.");
+        }
+        Set<Long> distinctIds = new HashSet<>(photoIds);
+        if (distinctIds.size() != photoIds.size()) {
+            throw new InvalidPhotoSelectionException("중복된 photoId가 포함되어 있습니다.");
+        }
+
+        ProductAnalysisSession session = ProductAnalysisSession.create(userId);
+        sessionRepository.save(session);
+
+        List<ProductPhoto> photos;
+        try {
+            photos = photoUsageCommitter.claimPhotos(photoIds, userId, session.getId());
+        } catch (RuntimeException e) {
+            // S3 업로드 실패와 같은 자리 - "사진을 분석 입력으로 확보하지 못했다"는 점에서
+            // 동일하므로 기존 recordImageUploadFailure를 그대로 재사용한다.
+            recordFailureSafely(() -> failureRecorder.recordImageUploadFailure(session.getId(), truncate(e.getMessage())));
+            throw e;
+        }
+
+        // slot 순서(SIDE, FRONT, OUTSOLE, DEFECT)대로 정렬해 Vision에 넘기는 이미지 순서를
+        // 요청이 도착한 순서가 아니라 항상 동일하게 고정한다.
+        List<ProductPhoto> ordered = photos.stream()
+                .sorted(Comparator.comparing(ProductPhoto::getSlot))
+                .toList();
+        List<String> imageUrls = ordered.stream().map(ProductPhoto::getOriginalUrl).toList();
+        List<String> analysisImageUrls = ordered.stream().map(ProductPhoto::getAnalysisUrl).toList();
+
+        return commitImagesAndEnqueue(session, imageUrls, analysisImageUrls);
+    }
+
+    // markImageUploaded 저장부터 #130 QUEUED 커밋(Redis 발행 "전"에 별도의 독립 트랜잭션
+    // AnalysisQueueCommitter로 커밋), 그 뒤의 enqueue까지 - submitForAnalysis()와
+    // submitForAnalysisByPhotoIds()가 공유하는 유일한 공통 꼬리 부분이다. 이 지점부터는 사진을
+    // 어디서 가져왔는지와 무관하게 완전히 같다. Worker는 enqueue가 호출된 뒤에야 메시지를 받을
+    // 수 있으므로, commitQueued가 끝난 뒤에만 enqueue()를 호출하면 Worker가 세션을 읽는 시점에는
+    // 항상 QUEUED 이상의 상태만 보인다. 이 메서드가 반환한 이후로는 더 이상 세션을 저장하지
+    // 않는다 - 발행 뒤에 오래된 in-memory 엔티티로 다시 save()하면 그 사이 Worker가 진행시킨
+    // 상태나 사용자의 CANCELLED를 덮어쓸 수 있기 때문이다.
+    private AnalyzeAcceptedResponse commitImagesAndEnqueue(
+            ProductAnalysisSession session, List<String> imageUrls, List<String> analysisImageUrls) {
         session.markImageUploaded(imageUrls);
         sessionRepository.save(session);
 
-        // #130: QUEUED를 Redis 발행 "전"에 별도의 독립 트랜잭션(AnalysisQueueCommitter)으로 커밋한다.
-        // Worker는 enqueue가 호출된 뒤에야 메시지를 받을 수 있으므로, 이 호출이 끝난 뒤에만
-        // enqueue()를 호출하면 Worker가 세션을 읽는 시점에는 항상 QUEUED 이상의 상태만 보인다.
-        // 이 메서드가 반환한 이후로는 이 메서드가 더 이상 세션을 저장하지 않는다 - 발행 뒤에
-        // 오래된 in-memory 엔티티로 다시 save()하면 그 사이 Worker가 진행시킨 상태나 사용자의
-        // CANCELLED를 덮어쓸 수 있기 때문이다.
         queueCommitter.commitQueued(session.getId());
 
         try {

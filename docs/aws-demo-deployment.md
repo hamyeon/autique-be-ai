@@ -68,6 +68,14 @@ OS/Docker 데몬 몫 ~864m 남김. t3.small(2048MiB) 기준 worker: 1536m, OS �
 |---|---|---|---|
 | `s3:PutObject` on `<bucket>/*` | ✅ | ❌ | 업로드는 API만(`S3UploaderService`) |
 | `s3:GetObject` on `<bucket>/*` | ✅(표시용 presign) | ✅(분석용 presign) | §4 |
+| `s3:DeleteObject` on `<bucket>/*` | ⚠️ 미반영 — 아래 참고 | ❌ | #135 미사용 사진 정리(`PhotoCleanupService`) |
+
+**#135 추가 필요(아직 실제 IAM에는 적용하지 않음)**: 미사용 사진 정리 스케줄러(`PhotoCleanupScheduler`,
+API EC2에서만 돈다 - `application-worker.yml`에서 `photo.cleanup.enabled=false`)가
+`S3UploaderService.deleteObjects()`로 원본·분석용 사본을 지운다. 이 기능을 실제로 켜기 전에
+API 역할에 `s3:DeleteObject`를 추가해야 한다 - 없으면 정리 자체는 조용히 실패하고(예외가
+트랜잭션을 롤백시켜 DB 행이 남음) 다음 주기에 다시 시도될 뿐 서비스 장애로는 이어지지 않지만,
+미사용 사진이 S3에 계속 쌓인다.
 | `ecr:GetAuthorizationToken` | ✅ | ✅ | 각 인스턴스가 자기 이미지를 직접 `docker pull` |
 | `ecr:BatchGetImage`, `ecr:GetDownloadUrlForLayer`, `ecr:BatchCheckLayerAvailability` | ✅ | ✅ | 〃 |
 | `ssm:GetParameter(s)` (+`kms:Decrypt`, SecureString) on `/vintic/demo/*` | ✅(자기 몫만) | ✅(자기 몫만) | env 부트스트랩(§3) |
