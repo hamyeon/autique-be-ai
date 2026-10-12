@@ -214,10 +214,13 @@ public class ClaudeChatClient implements ChatCompletionClient {
         );
     }
 
-    // 배포 직후 첫 분석이 클라이언트 생성과 api.anthropic.com TLS 연결 비용을 떠안지 않게 미리 연다(StartupWarmup).
-    // 모델 조회는 토큰을 쓰지 않는 엔드포인트라 비용 없이 연결만 데운다. 설정한 모델 ID가 틀렸으면 여기서 먼저 드러난다.
+    // 배포 직후 첫 분석이 클라이언트 생성·TLS 연결·메시지 호출 경로의 첫 비용을 떠안지 않게 미리 한 번 부른다(StartupWarmup).
+    // 모델 조회(무료)만으로는 첫 호출 8.0초가 2.7초까지만 줄었다 - 메시지 요청을 만들고 응답을 읽는 경로가 처음 한 번
+    // 느리기 때문이다. 몇 토큰짜리 실제 호출이면 다음 호출부터 평소 속도(약 1초)다(ClaudeWarmupHarnessTest, 2026-10-12).
+    // 비용은 모델당 수십 토큰이다. 설정한 모델 ID가 틀렸으면 여기서 먼저 드러난다.
     public void warmUp(String model) {
-        client().models().retrieve(model);
+        complete(new VisionChatRequest(model, "Reply with the single word OK.", "ping",
+                List.of(), VisionImageDetail.LOW, null, 1));
     }
 
     private AnthropicClient client() {
