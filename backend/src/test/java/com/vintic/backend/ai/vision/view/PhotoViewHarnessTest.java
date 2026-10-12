@@ -152,7 +152,7 @@ class PhotoViewHarnessTest {
                 properties.getPromptVersion(), properties.getModel(), properties.getMaxEdge(),
                 rows.size(), rows.size() - answered.size()));
 
-        // 앱 칸(측면/앞면/밑창)에 해당하는 사진만 칸 기준으로 센다. 나머지(뒤꿈치·위·기타)는 "잘못 넣은 사진"을 잡는지로 센다.
+        // 신발 사진(윗부분·밑창)은 칸 기준으로 센다. other(박스·라벨·신발 아님)는 "잘못 넣은 사진"을 잡는지로 따로 본다.
         long slotTotal = answered.stream().filter(row -> isSlot(row.expected())).count();
         long slotPass = answered.stream().filter(row -> isSlot(row.expected()))
                 .filter(row -> PhotoViewCheck.matches(row.expected(), row.actual())).count();
@@ -164,7 +164,12 @@ class PhotoViewHarnessTest {
                 .filter(row -> row.expected() != PhotoView.OUTSOLE && row.actual() == PhotoView.OUTSOLE).count();
         long exact = answered.stream().filter(row -> row.expected() == row.actual()).count();
 
-        text.append("칸 기준 통과(측면·앞면 서로 바뀜 허용): %s%n".formatted(ratio(slotPass, slotTotal)));
+        // 잘못 넣은 사진(other)을 신발 사진으로 보면 어느 칸에서든 그냥 통과된다.
+        long otherTotal = answered.stream().filter(row -> row.expected() == PhotoView.OTHER).count();
+        long otherCaught = answered.stream().filter(row -> row.expected() == PhotoView.OTHER)
+                .filter(row -> row.actual() == PhotoView.OTHER).count();
+        text.append("칸 기준 통과(윗부분 칸은 side/front/top/back 허용): %s%n".formatted(ratio(slotPass, slotTotal)));
+        text.append("잘못 넣은 사진(other)을 잡아냄: %s%n".formatted(ratio(otherCaught, otherTotal)));
         text.append("밑창 사진을 밑창으로: %s%n".formatted(ratio(outsolePass, outsoleTotal)));
         text.append("밑창이 아닌 사진을 밑창으로(거짓 통과): %d장%n".formatted(falseOutsole));
         text.append("면 그대로 정확도: %s%n%n".formatted(ratio(exact, answered.size())));
@@ -212,7 +217,7 @@ class PhotoViewHarnessTest {
     }
 
     private static boolean isSlot(PhotoView view) {
-        return view == PhotoView.SIDE || view == PhotoView.FRONT || view == PhotoView.OUTSOLE;
+        return view != PhotoView.OTHER;
     }
 
     private static String ratio(long hit, long total) {
