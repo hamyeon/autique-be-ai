@@ -104,6 +104,14 @@ vision:
       max-images: ${VISION_CONDITION_MAX_IMAGES:0}
       max-output-tokens: 1400
 
+  # 사진 한 장의 면(측면/앞면/밑창 등) 판정(PhotoViewClassifier). 사진을 칸에 넣는 순간 잘못 넣었는지 알려주려는
+  # 용도라 빠른 모델·작은 해상도가 기본이다. 아직 API에 연결되지 않았고 하네스(PhotoViewHarnessTest)로 정확도·속도를 재는 중이다.
+  photo-view:
+    model: ${VISION_PHOTO_VIEW_MODEL:claude-haiku-5-5}
+    prompt-version: ${VISION_PHOTO_VIEW_PROMPT_VERSION:v2}
+    max-edge: ${VISION_PHOTO_VIEW_MAX_EDGE:512}
+    max-output-tokens: 100
+
 # Purchase Agent(#95) - 자연어 구매 목표 파서.
 # provider: openai(LLM + 실패 시 규칙 기반 fallback) | rule(규칙 기반만).
 # 하네스에서 LLM이 규칙 기반보다 낫다는 게 확인되기 전이거나 OpenAI 장애 시 rule로 내린다.
