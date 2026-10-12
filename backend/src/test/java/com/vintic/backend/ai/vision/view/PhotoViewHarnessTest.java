@@ -40,18 +40,19 @@ import java.util.stream.Stream;
  *     wrong/other_box.jpg, top_laces.jpg
  *
  * 실행 (PowerShell에서는 -D 인자를 따옴표로 감싼다):
- *   ./gradlew test --tests '*PhotoViewHarnessTest' -Dvision.photo-view.harness=true \
- *     -Dvision.photo-view.harness.dir=C:/photos -Dvision.photo-view.harness.model=claude-haiku-5-5
+ *   ./gradlew test --tests '*PhotoViewHarnessTest' -Dvision.harness.photo-view=true \
+ *     -Dvision.harness.photo-view.dir=C:/photos -Dvision.harness.photo-view.model=claude-haiku-5-5
  *
+ * 옵션 이름이 vision.harness로 시작해야 build.gradle이 테스트 JVM에 넘겨준다.
  * model    기본 claude-haiku-5-5. max-edge 기본 512. effort 기본 low(운영값).
  *
  * 리포트(build/vision-harness/photo-view-*.txt)에 칸 기준 통과율(PhotoViewCheck), 면 그대로의 정확도,
  * 혼동표, 응답 시간(평균·중앙값·p90·최대, 첫 호출 따로), 사진당 토큰이 남는다.
  */
-@EnabledIfSystemProperty(named = "vision.photo-view.harness", matches = "true")
+@EnabledIfSystemProperty(named = "vision.harness.photo-view", matches = "true")
 class PhotoViewHarnessTest {
 
-    private static final String PREFIX = "vision.photo-view.harness";
+    private static final String PREFIX = "vision.harness.photo-view";
     private static final Path REPORT_DIRECTORY = Path.of("build", "vision-harness");
     private static final List<String> IMAGE_EXTENSIONS = List.of(".jpg", ".jpeg", ".png", ".webp");
 
