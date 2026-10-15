@@ -19,6 +19,32 @@ AI 담당은 셋이다. (1) 자연어 → Goal 초안 파싱, (2) 매물 적합�
 | 2026-09-10 | Goal 파서(규칙 기반 + OpenAI) · 모델 별칭 표 · 하네스 50케이스 · `POST /api/purchase-goals/parse` |
 | 2026-09-10 | 매물 적합도 Matcher(규칙 기반 + OpenAI) · 실제 당근 매물 59케이스 하네스 · 규칙 97%, 거짓 양성 0 |
 | 2026-09-10 | AI 시세 provider. `Product.recommendedPrice`가 클라이언트 값임을 확인 - Agent 시세는 ENGAGE 직전 서버 재계산으로 결정 |
+| 2026-10-15 | 전체 동작 흐름 순서도 추가(README에서 옮김). README에는 목표 등록·탐색 입찰 두 줄 요약만 남겼다 |
+
+## 전체 동작 흐름
+
+AI 부품(파서·Matcher·시세 provider)과 백엔드 워크플로(#109)를 합친 전체 흐름이다. 탐색은 `PurchaseGoalScanScheduler`가
+5분마다 돌린다(기본 꺼짐, `PURCHASE_AGENT_SCAN_ENABLED`). 낙찰 판정·재탐색·만료는 `PurchaseGoalResultObservationService`.
+
+```mermaid
+flowchart TD
+    A["구매자 입력<br>'뉴발란스 530, A급 이상, 30만 원 이하'"] --> B["Goal 파서 (AI)<br>예산 · 모델 · 사이즈 · 최소 등급 추출"]
+    B --> C["사용자 확인 · 수정"]
+    C --> D["구매 목표 등록<br>서버 검증"]
+
+    D --> E{{"5분마다 탐색"}}
+    E --> F["1차 필터<br>모델 · 최소 등급 · 사이즈 · 예산"]
+    F --> G["Matcher<br>'이 매물이 목표에 맞는가' 판정"]
+    G --> H["후보 순위<br>서버 시세 대비 할인율"]
+    H --> I["입찰 직전 시세 재계산<br>상한 = min(예산, 서버 시세 기준 한도)"]
+    I --> J["자동입찰 참여"]
+
+    J --> K{"경매 결과"}
+    K -- "낙찰" --> L["구매 목표 완료<br>결제는 사용자가 직접 승인"]
+    K -- "미낙찰" --> M{"목표 기한"}
+    M -- "남음" --> E
+    M -- "지남" --> N["구매 목표 만료"]
+```
 
 ---
 
