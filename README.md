@@ -1,6 +1,194 @@
-# be-ai
+# Autique BE·AI
 
-## Concurrency Experiments
+Autique의 백엔드와 AI 레포입니다. 중고 신발 경매 서비스의 경매·입찰·주문 API와, 사진 한 번으로 상품 정보와 가격을 채워 주는 AI 분석을 함께 담고 있습니다.
+
+- **backend/** — Spring Boot API 서버와 비동기 분석 Worker
+- **crawler/** — 중고 시세 수집과 가격 계수 산출 (Python)
+- **docs/** — API 계약, AI 시스템, 배포, 실험 기록
+- **loadtest/** — k6 부하 테스트
+
+## 주요 기능
+
+| 기능 | 설명 |
+| --- | --- |
+| 경매·입찰 | 수동 입찰, 자동입찰(Proxy Bidding), 종료 연장, 낙찰·차순위 이양·주문 |
+| AI 상품 분석 | 사진을 올리면 브랜드·모델·색상·사이즈·상태 등급을 초안으로 채웁니다 |
+| AI 가격 계산 | 당근·후르츠패밀리·KREAM 실거래 시세와 상태·구성품 계수로 추천가를 계산합니다 |
+| Purchase Agent | "뉴발 990 A급 15만원 이하" 같은 자연어 목표로 경매를 찾아 대신 입찰합니다 |
+| 개인화 추천 | 상품 임베딩과 행동 로그(입찰·찜·조회)로 취향에 맞는 경매를 추천합니다 |
+
+## 기술 스택
+
+### Backend
+
+| 기술 | 역할 |
+| --- | --- |
+| Java 17 | 백엔드 개발 언어 |
+| Spring Boot 3.5 | REST API 및 비즈니스 로직 |
+| MySQL 8.4 | 경매·입찰·주문 데이터 관리 |
+| Redis / Redis Streams | 캐싱 및 비동기 메시지 큐 |
+
+### Server & Infrastructure
+
+| 기술 | 역할 |
+| --- | --- |
+| AWS EC2 | API 서버와 Worker 서버 분리 운영 (2대) |
+| Docker | 컨테이너 기반 서비스 실행 |
+| Amazon S3 | 상품 이미지 저장 |
+| GitHub Actions | CI/CD 자동화 |
+| Amazon ECR | Docker 이미지 저장 및 배포 |
+
+### AI
+
+| 기술 | 역할 |
+| --- | --- |
+| Claude Sonnet 5 | Vision 라벨 판독 (사이즈·스타일 코드, 최종 브랜드·모델명) |
+| Claude Haiku 5.5 | Vision 실루엣(브랜드·모델·색상)·상태(등급·하자) 판정 |
+| Anthropic Java SDK | Spring Boot에서 Claude Messages API 호출 |
+| OpenAI GPT-4o-mini | Purchase Agent 자연어 Goal 파싱, 매물 적합도 Matcher |
+| OpenAI text-embedding-3-small | 상품 임베딩(1536차원) 기반 개인화 추천 |
+| Structured Outputs (JSON Schema) | 응답 형식 강제와 근거 없는 필드 null 처리로 환각 방지 |
+| Micrometer | AI 호출 지연·토큰·실패 지표 수집 |
+
+### Data Pipeline
+
+| 기술 | 역할 |
+| --- | --- |
+| Python | 크롤링·시세 캘리브레이션 |
+| Requests / BeautifulSoup / Playwright | 당근·후르츠패밀리·KREAM 시세 수집 (robots.txt 준수) |
+| CSV 시세 테이블 | 모델 시세 65개·색상 83개·상태/구성품 계수 (실거래 6,173건 기반) |
+
+## 아키텍처
+
+### 비동기 서버 구조
+
+API 서버는 분석 완료까지 기다리지 않고 바로 응답하며, Worker 서버가 Redis Streams로 작업을 받아 별도로 분석합니다.
+
+```
+API 요청 → Redis Streams 발행 → Worker 수신 → S3 이미지 조회 → AI 분석 → MySQL 결과 저장 → 메시지 ACK
+```
+
+### AI 분석 구조
+
+사진 분석은 세 단계(실루엣 / 라벨 판독 / 상태 판정)를 **동시에** 실행합니다. 전체 시간이 세 단계의 합이 아니라 가장 느린 한 단계의 시간이 됩니다. 단계마다 모델을 나눠, 가벼운 판정은 Haiku로, 작은 글씨 판독은 Sonnet으로 처리합니다.
+
+```
+사진 업로드 → S3(768px 분석용 사본) → Redis Streams → Vision 3단계 동시 분석
+  → 근거 검증 → 사용자 확인·수정 → 시세 기반 가격 계산
+```
+
+| 지표 (사진 3~6장, 실제 매물 14건) | 이전 (GPT-4o) | 현재 |
+| --- | --- | --- |
+| Vision 분석 시간 | 14.9초 | **4.7초** |
+| 분석 1건 비용 | 약 $0.05 | **약 $0.018** |
+
+AI가 채운 값은 모두 **초안**입니다. 근거(evidence)가 없는 값은 검증기가 비우고, 빈 값이나 경고가 있으면 사용자에게 확인을 요청합니다.
+
+## 시작하기
+
+### 사전 준비
+
+- JDK 17
+- Docker (로컬 MySQL·Redis 실행용)
+- Python 3.11 이상 (크롤러를 돌릴 때만, 3.11에서 테스트 확인)
+
+### 백엔드 실행
+
+```bash
+cd backend
+cp .env.example .env
+docker compose -f docker-compose.local.yml up -d   # MySQL, Redis
+
+export LOCAL_DB_PASSWORD=localpw                 # .env의 MYSQL_ROOT_PASSWORD와 같은 값
+export JWT_SECRET=<32자 이상 임의 문자열>
+export OPENAI_API_KEY=<OpenAI 키>
+export ANTHROPIC_API_KEY=<Anthropic 키>          # 없으면 기동은 되지만 Vision 분석이 실패합니다
+./gradlew bootRun --args='--spring.profiles.active=local'
+```
+
+서버는 `http://localhost:8080`에서 뜹니다. API 문서는 `http://localhost:8080/swagger-ui/index.html`, 상태 확인은 `http://localhost:8080/actuator/health`에서 볼 수 있습니다.
+S3 업로드를 쓰려면 `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `CLOUD_AWS_S3_BUCKET`도 넣어야 합니다. 전체 환경변수는 [docs/deployment-config.md](docs/deployment-config.md)에 정리되어 있습니다.
+
+### 크롤러 실행
+
+```bash
+cd crawler
+pip install -r requirements.txt pytest
+python -m pytest tests
+```
+
+> 당근마켓 수집은 2026-09-17부터 중단된 상태입니다. 검색 페이지 구조가 바뀌었고 robots.txt가 AI 크롤러를 막아, 우회하지 않고 2026-09-04 수집분을 최종 데이터로 쓰고 있습니다.
+
+## 스크립트
+
+| 명령 | 설명 |
+| --- | --- |
+| `./gradlew test` | 단위·통합 테스트 (유료 API 호출·성능 실험 제외) |
+| `./gradlew test -PincludeSlowTests` | 성능 실험·실제 AI 호출 테스트까지 포함 |
+| `./gradlew build` | 테스트 후 빌드 |
+| `scripts/aws/deploy.sh` | API·Worker EC2 배포 (GitHub Actions가 호출) |
+| `scripts/aws/smoke-analyze.sh` | 배포 후 분석 API 스모크 테스트 |
+| `loadtest/k6/run-stages.sh` | 인기 경매 동시 입찰 부하 테스트 |
+
+## 폴더 구조
+
+```
+backend/src/main/java/com/vintic/backend/
+├── ai/
+│   ├── vision/            # 사진 분석 (3단계 Vision, Claude/OpenAI 클라이언트)
+│   ├── purchase/          # Purchase Agent (Goal 파서, Matcher, 시세 provider)
+│   ├── search/            # 임베딩, 청킹
+│   ├── prompt/            # 프롬프트 템플릿 로더
+│   └── observability/     # AI 호출 기록·지표
+├── analyze/               # 분석 요청 API, Redis Streams 큐
+├── price/                 # 가격 계산
+├── recommendation/        # 개인화 추천
+├── auction/ bid/ autobid/ # 경매, 수동 입찰, 자동입찰
+├── backupoffer/ order/    # 차순위 이양, 주문
+├── penalty/ purchasegoal/ # 낙찰 포기 패널티, 구매 목표
+├── auth/ user/            # 인증(JWT, 카카오), 사용자
+└── common/ config/        # 공통 응답·예외, 설정
+
+backend/src/main/resources/
+├── prompts/               # Vision·Agent 프롬프트
+└── data/                  # 시세 CSV, 모델 별칭 표
+
+crawler/
+├── fruitsfamily/ kream/   # 사이트별 수집기
+├── calibration/           # 정제·계수 산출 (별칭, 필터, 상태·색상·구성품 계수)
+└── tests/
+```
+
+## 배포
+
+`main`으로 PR을 열면 GitHub Actions가 테스트와 빌드를 실행합니다(`pr.yml`). 배포(`deploy.yml`)는 Docker 이미지를 Amazon ECR에 올린 뒤 같은 이미지를 API EC2와 Worker EC2에 각각 배포합니다. Actions에서 수동으로 실행하거나, 저장소 변수 `AUTO_DEPLOY=true`일 때 `main` push마다 자동으로 실행됩니다.
+
+- API EC2: `dev,api` 프로필, 앞단에 Caddy가 HTTPS를 처리합니다
+- Worker EC2: `dev,worker` 프로필, 분석 큐 소비와 Vision 호출을 맡습니다
+
+자원 구성과 비밀값 설정은 [docs/aws-demo-deployment.md](docs/aws-demo-deployment.md)를 참고하세요.
+
+## 문서
+
+| 문서 | 내용 |
+| --- | --- |
+| [docs/auction-api-spec-final.md](docs/auction-api-spec-final.md) | 경매 API 최종 계약 |
+| [docs/api-spec.md](docs/api-spec.md) | 전체 API 명세 |
+| [docs/ai-system.md](docs/ai-system.md) | AI 시스템 전체 (크롤링 → Vision → 가격 → 추천 → Purchase Agent), 현재 상태와 실측 수치 |
+| [docs/ai-vision-agent.md](docs/ai-vision-agent.md) | Vision 프롬프트 설계, 평가 하네스, 벤더 비교 |
+| [docs/ai-pricing-agent.md](docs/ai-pricing-agent.md) | 가격 계산과 시세 측정 |
+| [docs/ai-purchase-agent.md](docs/ai-purchase-agent.md) | Purchase Agent AI 파트 |
+| [docs/ai-async-analysis.md](docs/ai-async-analysis.md) | Redis Streams 비동기 분석과 장애 복구 |
+| [docs/deployment-config.md](docs/deployment-config.md) | 배포 환경변수, 포트 구성 |
+| [docs/experiments/concurrency/summary.md](docs/experiments/concurrency/summary.md) | 입찰 동시성 제어 실험 결과 |
+
+---
+
+## 설계 기록
+
+경매·입찰 쪽 주요 설계 결정과 그 근거입니다.
+
+### Concurrency Experiments
 
 수동 입찰(`Auction`) read-modify-write 경쟁을 no-lock/pessimistic-lock 등 동일 조건에서
 비교하기 위한 실험. 프로토콜/환경/raw data/요약은 `docs/experiments/concurrency/`에 분리해
@@ -62,7 +250,7 @@ point는 단일 MySQL row(`Auction`)이고, 모든 write 경로가 이미 같은
 - 실행 환경: [docs/experiments/concurrency/environment.md](docs/experiments/concurrency/environment.md)
 - Raw data: [no-lock-correctness.csv](docs/experiments/concurrency/raw/no-lock-correctness.csv), [pessimistic-correctness.csv](docs/experiments/concurrency/raw/pessimistic-correctness.csv), [no-lock-performance.csv](docs/experiments/concurrency/raw/no-lock-performance.csv), [pessimistic-performance.csv](docs/experiments/concurrency/raw/pessimistic-performance.csv)
 
-## Proxy Bidding 구조
+### Proxy Bidding 구조
 
 자동입찰(AutoBid) 가격 결정 엔진(`autobid/proxy/ProxyPriceEngine`)은 두 트리거만 다룬다(#41
 후속에서 실제 구현, 그 이전엔 정책 문서만 있는 stub이었다):
@@ -79,7 +267,7 @@ point는 단일 MySQL row(`Auction`)이고, 모든 write 경로가 이미 같은
 생겼다 - 이 엔진을 그대로 호출할 뿐 새 계산식은 없다. 상세는 아래
 `Auction Lifecycle Scheduler` 절 참고.
 
-## Award → BackupOffer → Order 흐름
+### Award → BackupOffer → Order 흐름
 
 경매 종료 후 낙찰/포기/차순위 이양 흐름(#56). Result는 별도 테이블이 아니라 아래 네 도메인의
 상태를 조합해 매 조회마다 계산한다(`AuctionResultQueryService`, side-effect free).
@@ -138,7 +326,7 @@ point는 단일 MySQL row(`Auction`)이고, 모든 write 경로가 이미 같은
   [`docs/api/auction-api-contract-gap.md`](docs/api/auction-api-contract-gap.md)의
   `#56-1`~`#57 Implementation Notes` 참고.
 
-## Auction Lifecycle Scheduler
+### Auction Lifecycle Scheduler
 
 `#73`. `SCHEDULED → LIVE`/`LIVE → ENDED`를 시간 기반으로 자동 전환하는 production
 scheduler. FINAL API contract는 변경 없음(새 endpoint 없음, 기존 20개 그대로).
@@ -172,7 +360,7 @@ scheduler. FINAL API contract는 변경 없음(새 endpoint 없음, 기존 20개
   [`docs/api/auction-api-contract-gap.md`](docs/api/auction-api-contract-gap.md)의
   `#73 Implementation Notes` 참고.
 
-## Auction API Contract
+### Auction API Contract
 
 ```text
 Auction API contract frozen (#36-B)
