@@ -212,9 +212,3 @@ crawler/
 
 자원 구성과 비밀값 설정은 [docs/deployment/runbook.md](docs/deployment/runbook.md)를 참고하세요.
 
-- [docs/deployment/configuration.md](docs/deployment/configuration.md) — 환경변수·프로필·포트·관리 엔드포인트 참조
-
-**실험**
-- [docs/backend/experiments/concurrency/summary.md](docs/backend/experiments/concurrency/summary.md) — 입찰 동시성 제어 실험
-- [docs/backend/experiments/hot-auction-load/summary.md](docs/backend/experiments/hot-auction-load/summary.md) — 인기 경매 부하 테스트
-- [docs/backend/experiments/manual-bid-smoke-test.md](docs/backend/experiments/manual-bid-smoke-test.md) — 수동 입찰 단일 요청 스모크
