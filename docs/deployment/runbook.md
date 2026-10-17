@@ -1,0 +1,556 @@
+# AWS 시연 환경 배포 런북
+
+중간발표(및 이후 최종발표)용 공개 HTTPS 시연 환경을 AWS에 올리는 절차. `docs/deployment/configuration.md`
+(관리 엔드포인트·AI 호출 로그 등 일반 배포 환경변수)와 함께 본다.
+
+**이 문서 작성 시점 기준: 로컬 AWS 자격증명이 만료돼 있어 AWS 자원 생성·실제 배포·URL 검증은
+수행하지 못했다.** 아래는 파일 구현과 로컬에서 가능한 검증까지만 반영한 계획이다. "배포 후
+확인 필요"로 표시된 항목은 실제로 자원을 만들고 배포한 뒤에만 확인할 수 있다.
+
+## 구성 요약
+
+- **API EC2 1대**: 웹 API 전체 + 도메인 스케줄러(경매 시작/종료, 결제·차순위 만료, 구매에이전트
+  탐색) + MySQL·Redis 컨테이너 + Caddy(공개 HTTPS 진입점).
+- **Worker EC2 1대**: Redis Streams 소비(XREADGROUP)·PEL 회수(XAUTOCLAIM)·Vision 분석·DB 저장·
+  XACK만. 웹 트래픽 없음, 공인 인터넷에 미노출.
+- **HTTPS**: 도메인 구매/Elastic IP 없이, EC2 자동 할당 공인 IP + `<ip>.sslip.io` + Caddy 자동
+  Let's Encrypt.
+- **MySQL/Redis**: API EC2 위 컨테이너. 공인 인터넷에 미노출(사설 IP에만 바인딩 + 보안그룹).
+  기존 팀 공유 dev RDS(us-east-1)는 사용하지 않는다 - 새 시연 데이터로 시작한다.
+- **배포**: GitHub Actions → OIDC(AssumeRole, 장기 키 없음) → ECR → SSM RunCommand로 API/Worker에
+  동일 커밋 SHA 배포 → 각자 `/actuator/health`로 준비 상태 확인 → 실패 시 이전 정상 이미지로 롤백.
+
+---
+
+## 배포 절차 개요 (현재 기준 — 먼저 읽기)
+
+배포는 GitHub Actions(`.github/workflows/deploy.yml`)가 테스트 → 이미지 빌드/ECR 푸시 →
+`scripts/aws/deploy.sh` 순으로 실행한다. **현재 `deploy.sh`가 실제로 보장하는 것**(이것이 현재
+지침의 정본이다):
+
+1. **대상 탐색**: 태그로 API/Worker 인스턴스를 찾는다. 둘 다 멈춰 있으면 아무 것도 하지 않고 성공
+   종료, 한쪽만 떠 있으면 API/Worker SHA 불일치를 막으려고 거부한다.
+2. **스키마 사전 게이트(읽기 전용, `ALTER` 없음)**: API EC2의 MySQL에 접속해
+   `product_analysis_session`의 `cancelled_at`·`registered_at` 컬럼과 `status` ENUM의 `CANCELLED`
+   포함을 `information_schema`로만 확인한다. 하나라도 불충족이거나 접속/쿼리에 실패하면 **API/Worker
+   컨테이너를 하나도 바꾸지 않고 배포를 중단**한다(종료 코드 4, 마이그레이션을 먼저 적용하라고 안내).
+3. **배포 순서 Worker → API**: Worker를 먼저 배포하고 `/actuator/health` UP을 확인한 뒤에만 API를
+   배포한다. Worker 배포·검증이 실패하면 API는 시도하지 않는다. (순서가 Worker 먼저인 이유는 §12 —
+   구 Worker는 `CANCELLED` 상태를 몰라, API가 먼저 그 상태를 만들면 구 Worker가 그 행을 읽다 실패한다.)
+4. **성공 시** last-known-good SHA를 갱신한다. **실패 시** 이전 SHA 이미지로 롤백하되, 롤백 대상
+   이미지가 **호환 라벨(`com.autique.compat.analysis-cancellation=supported`)** 을 가질 때만
+   되돌린다. 라벨이 없거나(구버전 이미지) pull에 실패하면 **롤백을 차단(`ROLLBACK_BLOCKED`)** 하고
+   컨테이너를 그대로 둔다 — 이때는 되돌리기가 아니라 **앞으로 고치기**(호환 이미지 재배포)로 복구한다(§12).
+
+| 시나리오 | 무엇을 하나 | 참고 |
+| --- | --- | --- |
+| **(A) 최초 환경 구축 + DB 준비** | 자원 생성 · env 파일 배치 · **base 스키마 생성 + 127 마이그레이션 적용**(게이트 통과 전제) · 첫 배포 | §1~§5 (특히 §5 "최초 스키마 준비") |
+| **(B) 이미 구축된 환경의 일반 배포** | `deploy.yml` 실행 → 게이트 → Worker→API → 실패 시 롤백 | 위 1~4, §12 |
+| **(C) #127형 스키마 변경 선행** | 스키마 변경은 **사람이 마이그레이션 SQL을 먼저 적용**한 뒤 배포(게이트가 미적용 배포를 차단) | §12 |
+
+> **빈 DB 최초 배포 공백(중요).** 위 2번 게이트는 **이미 떠 있는 MySQL에 base 스키마 + 127
+> 마이그레이션이 적용된 상태**를 전제하고, 실행 중인 MySQL 컨테이너에 접속해 확인한다. 따라서 빈
+> 환경·미기동 상태에서는 게이트가 바로 실패해(컨테이너를 바꾸지 않고 중단) **`deploy.yml` 하나만으로는
+> 최초 부트스트랩이 완결되지 않는다.** 최초 스키마를 준비하는 방법과 저장소 근거/공백은 §5 "최초 스키마
+> 준비"에 정리했다 — 이 공백은 스크립트·DB를 고쳐 메우지 않고 명시만 한다.
+
+---
+
+## 1. 새로 생성할 AWS 자원과 예상 비용
+
+리전: `ap-northeast-2`(서울) - 팀 공유 dev RDS(us-east-1)와 무관하게, 이전 인프라 실험 계정/
+관례와 맞춘다. 이전 실험 자원(VPC/ECR/SQS 등)은 전부 삭제된 상태라고 가정하고 전부 새로 만든다.
+
+| 자원 | 용도 | 대략 비용(24/7 기준) |
+|---|---|---|
+| EC2 API `t3.medium`(4GiB) | API + MySQL + Redis + Caddy | ~$0.052/hr ≈ $37/월 |
+| EC2 Worker `t3.small`(2GiB) | Worker(Vision 분석) | ~$0.026/hr ≈ $19/월 |
+| 공인 IPv4 자동할당 × 2 | 실행 중에만 과금(2024-02~) | ~$7.3/월 |
+| EBS gp3 (루트 + `mysql-data` 볼륨) | 스토리지 | ~$3/월 |
+| ECR 리포지토리 | 이미지 저장 | <$1/월 |
+| VPC/서브넷/보안그룹/IAM 역할/OIDC provider | 자체는 무료 | $0 |
+| **Elastic IP·ALB·RDS·NAT Gateway** | **사용 안 함** | $0 |
+| **합계(상시)** | | **~$67/월** |
+
+**저비용 대안**(API `t3.small` + Worker `t3.micro`, ~$40/월)은 이 문서의 컨테이너 메모리 상한을
+전부 건 상태에서 실측(`docker stats`)한 뒤에만 채택한다 - 측정 전에 안정적이라고 단정하지 않는다.
+
+발표 기간(1주)만 쓰고 평소엔 EC2를 **중지(Stop)** 하면 컴퓨트+공인 IPv4 과금이 멈춘다(§7).
+실사용 비용은 위 월액의 극히 일부로 예상된다.
+
+### 메모리 산정 근거
+
+기존 `Dockerfile`은 `java -jar`만 실행해 **힙 상한이 없었다** - JVM 기본
+`MaxRAMPercentage=25%`는 컨테이너가 아니라 **호스트 전체 RAM**을 기준으로 계산된다. Redis도
+`maxmemory` 미설정, MySQL도 `innodb_buffer_pool_size` 기본값(~128MB)이었다. 이 상태로는 인스턴스
+크기별 안정성을 가늠할 수 없어, `docker-compose.aws-api.yml`/`docker-compose.aws-worker.yml`에
+`JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=60` + 각 서비스 `mem_limit`을 명시적으로 걸었다.
+
+t3.medium(4096MiB) 기준 배분: api 2048m + mysql 768m + redis 320m + caddy 96m = 3232m,
+OS/Docker 데몬 몫 ~864m 남김. t3.small(2048MiB) 기준 worker: 1536m, OS 몫 ~512m 남김.
+**실제 부하 시 여유가 충분한지는 배포 후 `docker stats`로 확인이 필요하다(배포 후 확인 필요).**
+
+---
+
+## 2. IAM 인스턴스 역할 — 권한 표
+
+정적 `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`는 배포 환경 어디에도 넣지 않는다. S3는 EC2
+인스턴스 역할로만 인증한다(`S3Config`가 access-key/secret-key가 비어있으면 자동으로
+`DefaultCredentialsProvider`로 전환 - 로컬 개발은 기존처럼 정적 키를 채워 쓸 수 있다).
+
+| 권한 | API 역할 | Worker 역할 | 근거 |
+|---|---|---|---|
+| `s3:PutObject` on `<bucket>/*` | ✅ | ❌ | 업로드는 API만(`S3UploaderService`) |
+| `s3:GetObject` on `<bucket>/*` | ✅(표시용 presign) | ✅(분석용 presign) | §4 |
+| `s3:DeleteObject` on `<bucket>/*` | ⚠️ 미반영 — 아래 참고 | ❌ | #135 미사용 사진 정리(`PhotoCleanupService`) |
+
+**#135 추가 필요(아직 실제 IAM에는 적용하지 않음)**: 미사용 사진 정리 스케줄러(`PhotoCleanupScheduler`,
+API EC2에서만 돈다 - `application-worker.yml`에서 `photo.cleanup.enabled=false`)가
+`S3UploaderService.deleteObjects()`로 원본·분석용 사본을 지운다. 이 기능을 실제로 켜기 전에
+API 역할에 `s3:DeleteObject`를 추가해야 한다 - 없으면 정리 자체는 조용히 실패하고(예외가
+트랜잭션을 롤백시켜 DB 행이 남음) 다음 주기에 다시 시도될 뿐 서비스 장애로는 이어지지 않지만,
+미사용 사진이 S3에 계속 쌓인다.
+| `ecr:GetAuthorizationToken` | ✅ | ✅ | 각 인스턴스가 자기 이미지를 직접 `docker pull` |
+| `ecr:BatchGetImage`, `ecr:GetDownloadUrlForLayer`, `ecr:BatchCheckLayerAvailability` | ✅ | ✅ | 〃 |
+| `ssm:GetParameter(s)` (+`kms:Decrypt`, SecureString) on `/vintic/demo/*` | ✅(자기 몫만) | ✅(자기 몫만) | env 부트스트랩(§3) |
+| `AmazonSSMManagedInstanceCore`(관리형 정책) | ✅ | ✅ | SSM Session Manager로 관리(22번 포트 미개방) |
+
+**Worker도 S3 GetObject가 필요한 이유**: presigned URL의 접근 권한은 서명 시점이 아니라 **실제로
+GET하는 시점의 서명 주체 권한**으로 평가된다. Worker가 Vision 호출 직전 presign한 URL을
+OpenAI/Claude가 실제로 fetch하는 시점에, Worker의 IAM 역할에 GetObject 권한이 없으면 403이 난다.
+
+### 컨테이너 안에서 IAM 역할 자격증명 조회 — IMDSv2 주의
+
+Docker 컨테이너는 기본 bridge 네트워크라 인스턴스 메타데이터(169.254.169.254) 요청이 호스트→
+컨테이너로 **홉이 하나 늘어난다**. IMDSv2는 홉 제한(`HttpPutResponseHopLimit`) 기본값이 1이라,
+컨테이너 안에서는 기본값으로 토큰 발급(PUT)이 실패할 수 있다. **EC2 생성 시 반드시**
+`--metadata-options "HttpTokens=required,HttpPutResponseHopLimit=2"` 를 지정한다(hop-limit 2 이상).
+
+검증법(배포 후 확인 필요): 컨테이너 안에서
+```bash
+curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600"
+```
+토큰이 발급되는지 확인 → 이어서 API의 `POST /api/products/analyze`(S3 업로드)와 Worker의 Vision
+호출(presign)이 실제로 되는지 확인한다.
+
+---
+
+## 3. 사용자가 설정할 비밀/변수
+
+값 자체는 이 문서에 적지 않는다.
+
+### GitHub → repo Settings → Secrets and variables → Actions
+
+| 종류 | 이름 | 설명 |
+|---|---|---|
+| Secret | `AWS_ROLE_ARN` | OIDC로 GitHub Actions가 assume할 배포 역할 ARN |
+| Variable | `AWS_ACCOUNT_ID` | AWS 계정 ID |
+| Variable | `AWS_REGION` | `ap-northeast-2` |
+| Variable | `ECR_REPOSITORY` | ECR 리포지토리 이름 |
+| Variable | `PROJECT_TAG` | EC2 태그 `Project` 값(인스턴스 검색 기준) |
+| Variable | `ENVIRONMENT_TAG` | EC2 태그 `Environment` 값 |
+| Variable | `LAST_GOOD_PARAMETER` | 예: `/vintic/demo/deploy/last-known-good` |
+| Variable | `AUTO_DEPLOY` | 초기 미설정(또는 `false`). 첫 배포 검증 후 `true`로 전환(§5) |
+
+CI 테스트용 `OPENAI_API_KEY`/`JWT_SECRET`은 워크플로 안에 플레이스홀더 값으로 이미 넣어뒀다 -
+실제 키가 아니므로 GitHub Secret으로 등록할 필요가 없다.
+
+### AWS SSM Parameter Store (SecureString 권장) → EC2의 `/opt/autique/api.env` / `worker.env`로 부트스트랩
+
+| SSM 파라미터(예시 경로) | 컨테이너 env로 매핑 | 비고 |
+|---|---|---|
+| `/vintic/demo/db/username` | `SPRING_DATASOURCE_USERNAME`, `MYSQL_USER` | API/Worker 공용(동일 값) |
+| `/vintic/demo/db/password` | `SPRING_DATASOURCE_PASSWORD`, `MYSQL_PASSWORD` | API/Worker 공용(동일 값) |
+| `/vintic/demo/db/root-password` | `MYSQL_ROOT_PASSWORD` | mysql 컨테이너 전용(앱은 쓰지 않음) |
+| `/vintic/demo/openai-api-key` | `OPENAI_API_KEY` | Goal 파서·Matcher·임베딩 |
+| `/vintic/demo/anthropic-api-key` | `ANTHROPIC_API_KEY` | Vision 기본 벤더(`vision.provider: claude`). 없으면 Worker의 첫 Vision 호출이 실패한다 |
+| `/vintic/demo/jwt-secret` | `JWT_SECRET` | 32자 이상, 신규 생성(과거 값 재사용 금지) |
+| `/vintic/demo/s3-bucket` | `CLOUD_AWS_S3_BUCKET` | |
+| `/vintic/demo/cors-allowed-origins` | `CORS_ALLOWED_ORIGINS` | 프론트 오리진(§6) |
+| (Worker만) `/vintic/demo/redis-host` | `SPRING_DATA_REDIS_HOST` | API의 **사설 IP** |
+| (배포 스크립트) `/vintic/demo/deploy/last-known-good` | - | `scripts/aws/deploy.sh`가 직접 갱신 |
+
+**`SPRING_DATASOURCE_URL`은 SSM에 두지 않는다.** API와 Worker가 접속하는 MySQL 호스트가 서로
+달라(API=Compose 서비스 이름 `mysql`, Worker=API EC2의 **사설 IP**) 파라미터 하나로 두 값을
+동시에 줄 수 없는데, 접속 주소 자체는 계정/비밀번호와 달리 비밀값이 아니다. 새 SSM 파라미터
+경로를 추가하지 않고(IAM 정책이 허용하는 경로를 다시 맞출 필요가 없도록), 아래 "EC2에 직접
+두는 값"에서 각 EC2의 env 파일에 사람이 직접 적는다. 계정/비밀번호는 계속 위 표의 공용 SSM
+파라미터에서 가져온다. 같은 이유로 API의 `SPRING_DATA_REDIS_HOST`도 SSM을 거치지 않는다 -
+Compose 네트워크 안의 고정된 서비스 이름(`redis`)이라 `docker-compose.aws-api.yml`의
+`api.environment`에 직접 선언돼 있다(Worker는 API EC2가 생성돼야 알 수 있는 사설 IP라서 위
+표의 SSM 파라미터를 그대로 쓴다 - API와 달리 고정값이 아니다).
+
+시연 중 벡터 백필 비활성화는 코드 기본값(`application-api.yml`)이 이미 꺼져 있다 - 켜려면 API
+컨테이너 env에 `RECOMMENDATION_VECTOR_BACKFILL=true`를 추가하고 재배포한다(§8 참고, 배포 후 확인 필요).
+
+### EC2에 직접 두는 값
+
+- `/opt/autique/.env`: `API_PRIVATE_IP`(API EC2 자신의 사설 IP, mysql/redis 포트 바인딩용),
+  `SITE_ADDRESS`(`<공인IP-하이픈>.sslip.io`), `IMAGE_URI`(배포 스크립트가 매 배포마다 갱신).
+- `/opt/autique/api.env`: `SPRING_DATASOURCE_USERNAME`·`MYSQL_USER`(위 `/vintic/demo/db/username`과
+  **동일한 값**), `SPRING_DATASOURCE_PASSWORD`·`MYSQL_PASSWORD`(위 `/vintic/demo/db/password`와
+  **동일한 값** - `mysql` 서비스도 같은 `api.env`를 `env_file`로 읽으므로, API가 접속하는 계정과
+  MySQL 컨테이너가 실제로 만드는 계정이 다르면 API가 기동 직후부터 인증 실패로 죽는다), 그 외
+  `MYSQL_ROOT_PASSWORD`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `JWT_SECRET`, `CLOUD_AWS_S3_BUCKET`,
+  `CORS_ALLOWED_ORIGINS`(위 SSM 파라미터를 그대로 옮겨 적음) + 리터럴
+  `SPRING_DATASOURCE_URL=jdbc:mysql://mysql:3306/autique`(SSM이 아님, 위 설명 참고).
+- `/opt/autique/worker.env`: `SPRING_DATASOURCE_USERNAME`·`SPRING_DATASOURCE_PASSWORD`(API와
+  동일한 SSM 파라미터에서 옮겨 적은 **같은 계정** - Worker도 API EC2 위 같은 MySQL을 쓴다),
+  `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`(Vision 분석은 Worker가 수행하므로 필수), `JWT_SECRET`(API와 동일 - `application.yml`의 `jwt.secret: ${JWT_SECRET}`은
+  기본값이 없어 `dev` profile을 함께 쓰는 Worker도 이 값 없이는 기동 자체가 실패한다),
+  `CLOUD_AWS_S3_BUCKET`(위 SSM 파라미터를 그대로 옮겨 적음) + 리터럴
+  `SPRING_DATASOURCE_URL=jdbc:mysql://<API_PRIVATE_IP>:3306/autique`,
+  `SPRING_DATA_REDIS_HOST=<API_PRIVATE_IP>`(둘 다 API EC2의 실제 사설 IP로 치환, SSM이 아님 -
+  API EC2가 만들어진 뒤에만 알 수 있는 값이라 애초에 SSM에 둘 이유가 없다. Redis host만은
+  예외적으로 위 SSM 표의 `/vintic/demo/redis-host`에서 옮겨 적어도 된다 - API 생성 직후
+  한 번만 기록해 두면 재사용 가능하기 때문).
+- 두 파일 모두 mode 600, git 비추적. 최초 1회는 사람이 SSM에서 공용 값을 읽고 나머지(URL)는
+  직접 적어 수동으로 만들거나, 부트스트랩 스크립트로 만든다(이 스크립트는 이번 범위에 포함하지
+  않았다 - 배포 후 필요 시 추가).
+
+---
+
+## 4. S3 이미지 접근 — presign 범위와 남겨둔 정책 질문
+
+`S3UploaderService`는 원본(표시용)과 `analysis/` 프리픽스 사본(Vision 분석용)을 같은 버킷에
+**공개 형식 URL**로 올린다(`https://<bucket>.s3.<region>.amazonaws.com/<key>`). 버킷을
+public-read로 바로 열지 말라는 요구에 따라, 버킷은 퍼블릭 액세스 차단을 유지하고 **필요한
+순간에만 presigned GET URL**을 만들어 넘긴다(`S3UrlPresigner`, `S3Config`의 `S3Presigner` 빈):
+
+- **분석 경로**: `AnalysisTaskConsumer.processVisionAndFinish`가 Vision 호출 **직전**에
+  `analysis/` 사본 URL을 presign(TTL 1시간). 업로드 시점에 미리 서명해 두지 않는 이유: PEL
+  회수로 한참 뒤 재처리될 수 있어 그때는 서명이 만료돼 있을 수 있다.
+- **표시 경로(분석 세션 폴링)**: `ProductAnalyzeService.getStatus`가 원본 URL을 presign(TTL
+  6시간) - `POST /api/products/analyze`가 인증 필수로 바뀌고(§5) 세션에 소유자 검증이 생기면서
+  (`ProductAnalysisSession.userId`), 그 밑의 이미지 접근도 로그인한 소유자로만 좁혔다.
+
+- **공개 마켓플레이스 조회 응답**: 상품 등록 후 `ProductResponse`/`ProductListResponse`, 경매
+  조회(`AuctionQueryService`)·경매 결과(`AuctionResultQueryService`)·주문(`OrderQueryService`)·
+  차순위 제안(`BackupOfferQueryService`) 응답도 이미지 URL을 응답 시점에 presign(TTL 24시간)해
+  내보낸다. 그래서 **버킷 전체를 비공개로 둬도 마켓플레이스 이미지가 깨지지 않는다.** 같은 S3 키가
+  비공개 분석 세션과 공개 상품 등록 후 두 국면에서 재사용되지만, 어느 쪽이든 서명된 URL로만 열린다.
+
+---
+
+## 5. 최초 환경 구축과 첫 배포
+
+> **이 절은 최초 환경 구축(최초 1회) 절차다.** 이미 구축된 환경의 반복 배포는 위 "배포 절차 개요"의
+> **(B) 일반 배포**를 따른다. 현재 자동 배포가 강제하는 **순서·게이트의 정본은 "배포 절차 개요" + §12
+> + `scripts/aws/deploy.sh`** 이며, 배포 순서는 **Worker → API**다(아래 7단계도 이 기준으로 정정했다 —
+> 과거엔 API→Worker로 서술돼 있었다).
+
+전제: 아래 순서는 AWS 자격증명이 복구된 뒤 사용자가 직접 실행한다. **이 문서 작성 시점까지 실제 AWS
+자원 생성·배포·URL 검증은 수행되지 않았다**(§11) — "배포 후 확인 필요" 항목은 실제 배포 후에만 확인된다.
+
+### 최초 스키마 준비 (빈 DB) — 저장소 근거로 확인된 것과 공백
+
+`scripts/aws/deploy.sh`의 스키마 사전 게이트는 **이미 실행 중인 MySQL에 base 스키마와 #127
+마이그레이션이 적용돼 있는 상태**를 전제한다(위 "배포 절차 개요" 2번). 빈 DB를 게이트가 만들어 주지는
+않는다.
+
+- **저장소 근거로 확인되는 것**:
+  - base 스키마는 애플리케이션을 한 번 기동하면 Hibernate `ddl-auto: update`(dev/api 프로필)가 JPA
+    엔티티 기준으로 생성한다(`application-dev.yml`·`application-api.yml`). Worker 프로필은
+    `ddl-auto: validate`라 스키마를 만들지 않는다(`application-worker.yml`).
+  - `status` ENUM의 `CANCELLED` 값은 `ddl-auto: update`가 추가하지 않으므로 반드시
+    `backend/scripts/migrations/127-cancel-image-analysis.sql`로 적용해야 한다 — 그 SQL 파일 상단
+    주석이 "테이블 자체가 없는 신규 환경에서는 애플리케이션을 한 번 기동해 테이블을 먼저 만든 뒤 이
+    스크립트를 적용한다"고 명시한다(재실행 안전). 아래 §12 1단계와 같은 SQL이다.
+- **현재 공백(스크립트·DB를 고치지 말고 명시만 함)**:
+  - 위 "앱을 한 번 기동해 base 스키마를 만드는" 단계를 **게이트 통과 전에** 수행하는 경로가
+    `deploy.sh`/`deploy.yml`에 없다. 게이트가 배포보다 먼저, 그리고 **실행 중인 MySQL 컨테이너에
+    접속해** 돌기 때문에, 빈 DB·미기동 상태에서는 게이트가 곧바로 실패한다(컨테이너를 바꾸지 않고
+    중단).
+  - 따라서 최초 1회는 **사람이** API EC2에서 앱(+MySQL)을 한 번 올려 base 스키마를 만들고 127 SQL을
+    적용한 **다음에** `deploy.yml`을 실행해야 게이트를 통과한다. 이 "게이트 이전 최초 기동"의 정확한
+    수행 방법(예: 수동 `docker compose up`)은 저장소에 스크립트로 확정돼 있지 않다 — 이 공백은 그대로
+    두고 최초 구축 시 수동으로 처리한다(스크립트/DB 수정 금지).
+
+**중요**: 4~5단계에서는 EC2에 파일만 준비하고 **API/Worker 컨테이너를 띄우지 않는다.**
+`docker-compose.aws-*.yml`의 `image: ${IMAGE_URI}`가 가리키는 이미지는 7단계(`workflow_dispatch`)
+에서 빌드돼 ECR에 처음 올라간다 - 그 전에 `docker compose up`을 시도하면 이미지가 없어 실패한다.
+mysql/redis도 사람이 미리 띄울 필요가 없다 - `docker-compose.aws-api.yml`의 `api` 서비스에
+`depends_on`(`service_healthy`)으로 선언돼 있어, 7단계에서 `scripts/aws/deploy.sh`가
+`docker compose up -d --force-recreate api`를 처음 실행할 때 Compose가 mysql/redis부터 띄우고
+헬스체크를 기다린 뒤 api를 기동한다.
+
+1. `aws login`(SSO 재인증). 계정 ID/리전 확인.
+2. OIDC provider + GitHub Actions가 assume할 IAM 역할 생성(§3의 `AWS_ROLE_ARN`) - 이 repo만
+   신뢰하도록 조건을 좁힌다.
+3. VPC/서브넷/보안그룹 2개(API/Worker, §7), EC2 2대 생성(§1 크기, `Project`/`Environment`/
+   `Role=api|worker` 태그, §2 IAM 인스턴스 역할 + IMDSv2 hop-limit=2), ECR 리포지토리 생성.
+4. **API EC2 파일 준비(컨테이너는 아직 띄우지 않음)**:
+   - Docker + Compose 플러그인 설치(Amazon Linux 2023/Ubuntu 공통, Docker 공식 설치 스크립트
+     사용):
+     ```bash
+     curl -fsSL https://get.docker.com | sh
+     sudo systemctl enable --now docker
+     sudo usermod -aG docker "$USER"   # 적용하려면 재로그인 필요
+     docker compose version            # Compose 플러그인이 같이 설치됐는지 확인(필수)
+     ```
+     `docker compose version`이 실패하면(Compose 플러그인 누락) 이후 `scripts/aws/deploy.sh`의
+     모든 `docker compose ...` 호출이 실패한다 - 반드시 여기서 확인하고 넘어간다.
+   - `/opt/autique/`에 `docker-compose.aws-api.yml`·`Caddyfile` 배치, `.env`(`API_PRIVATE_IP`/
+     `SITE_ADDRESS` - `IMAGE_URI`는 비워두거나 더미 값으로 둔다, 7단계에서 배포 스크립트가 갱신)
+     작성, `api.env` 채우기(§3 SSM 파라미터 + 리터럴 `SPRING_DATASOURCE_URL`, §3 "EC2에 직접
+     두는 값" 참고).
+5. **Worker EC2 파일 준비(컨테이너는 아직 띄우지 않음)**: 같은 방식으로 Docker/Compose 설치 +
+   `docker compose version` 확인, `docker-compose.aws-worker.yml` 배치, `worker.env` 채우기
+   (DB/Redis 호스트는 API EC2의 **사설 IP**, §3 참고).
+6. GitHub Secrets/Variables 입력(§3, `AUTO_DEPLOY`는 아직 설정하지 않거나 `false`로 둔다).
+   `.github/workflows/deploy.yml`·`pr.yml`·`scripts/aws/deploy.sh`를 커밋해 **`main`에 반영**한다
+   - `workflow_dispatch`는 워크플로 파일이 기본 브랜치에 있어야 GitHub UI/CLI에서 실행할 수 있다.
+7. **위 "최초 스키마 준비"를 끝낸 뒤** `workflow_dispatch`로 `deploy.yml`을 실행한다. 워크플로는
+   테스트 → 이미지 빌드/ECR 푸시 → `scripts/aws/deploy.sh` 순으로 돈다. `deploy.sh`는 **먼저 스키마
+   사전 게이트(읽기 전용)** 를 돌려 `cancelled_at`/`registered_at` 컬럼과 `status` ENUM의 `CANCELLED`를
+   확인하고, 불충족이거나 MySQL에 접속하지 못하면 **컨테이너를 하나도 바꾸지 않고 중단**한다(종료 코드 4).
+   게이트를 통과하면 **Worker를 먼저 배포·검증한 뒤 API를 배포**한다(순서가 Worker→API인 이유는 §12).
+   둘 중 하나라도 실패하면 롤백을 시도한다(롤백 조건·차단은 "배포 절차 개요" 4번·§12 참고).
+   - **주의(빈 DB 공백)**: 게이트는 이미 떠 있는 MySQL과 준비된 스키마를 전제하므로, 첫 실행 전에
+     "최초 스키마 준비"가 끝나 있어야 한다. `deploy.yml` 하나만으로 빈 DB를 처음부터 띄우는 경로는
+     현재 스크립트에 없다.
+   - 배포 후 확인: API EC2에서 `docker exec -it <mysql 컨테이너> mysql -uroot -p -e 'SHOW TABLES;'`
+     로 스키마 생성 여부 확인.
+8. **Caddy 기동(수동)**: `scripts/aws/deploy.sh`는 `api`/`worker` 서비스만 다루고 `caddy`는
+   건드리지 않는다 - API EC2에서 `docker compose -f docker-compose.aws-api.yml up -d caddy`를
+   직접 실행한다. `https://<api-공인ip>.sslip.io/actuator/health` 접속 확인(§8 공인 IP 변경
+   절차도 참고).
+9. `scripts/aws/smoke-analyze.sh`로 실제 analyze 요청 1건이 `AWAITING_USER_CONFIRMATION`까지 이어지는지
+   확인(자동 게이트와 분리된 이유는 Vision(Claude) 호출 비용).
+10. 정상 확인 후 repo variable `AUTO_DEPLOY=true` → 이후 main 병합 시 자동 배포로 전환.
+
+**롤백 검증**: `scripts/aws/deploy.sh`는 배포 실패 시 SSM 파라미터의 last-known-good SHA로 API/
+Worker를 함께 되돌린다. 실제로 검증하려면(배포 후 확인 필요) 일부러 깨지는 이미지를 만들어
+배포해 롤백이 실제로 동작하는지 1회 확인하는 것을 권장한다 - 이번 스크립트에는 그런 트리거를
+포함하지 않았으니, 필요하면 별도로 준비한다.
+
+> 위 4~10단계는 AWS 접근 권한이 없어 이번 세션에서 실행하지 못했다 - "배포 후 확인 필요".
+
+---
+
+## 6. 카카오 로그인 · 프론트 연결 · CORS
+
+- `POST /api/auth/kakao`(`KakaoUserInfoClient`)는 프론트가 카카오 SDK로 이미 받아온 access
+  token을 그대로 Bearer로 전달받아 신원만 확인한다 - **백엔드에는 OAuth 리다이렉트 URI가 없다.**
+  API EC2의 공인 IP가 바뀌어도 **카카오 디벨로퍼스 설정을 바꿀 필요가 없다.**
+- 프론트가 바꿀 값: **API base URL = `https://<api-공인ip>.sslip.io`**. IP가 바뀔 때마다
+  갱신 필요(§8).
+- 카카오 디벨로퍼스에 등록할 값(사람이 입력, 백엔드 IP와 무관): **프론트의 사이트 도메인 /
+  JavaScript SDK 도메인**. 정확한 값은 프론트 배포 주소가 정해져야 확정된다 - 프론트 오리진을
+  등록한다.
+- `CORS_ALLOWED_ORIGINS`(API 컨테이너 env, `JwtSecurityConfig.corsConfigurationSource()`) =
+  **프론트 오리진**(콤마 구분 가능). 인증이 쿠키가 아니라 Authorization 헤더 기반이라
+  `allowCredentials`는 필요 없다. 프론트 오리진이 바뀌지 않는 한, API의 공인 IP가 바뀌어도
+  CORS 값은 그대로다.
+- `/api/products/analyze`(POST/GET)는 이제 인증 필수다(§5의 보안 변경) - 시연은 판매자가 먼저
+  로그인한 뒤 사진 분석을 진행해야 한다. 프론트가 바꿀 것: 이 두 엔드포인트 호출 시
+  `Authorization: Bearer <accessToken>` 헤더 필수, 미인증 시 401 응답.
+
+---
+
+## 7. 보안그룹 / 포트 규칙 + 검증
+
+- **API SG 인바운드**: 80·443 from `0.0.0.0/0`(Caddy). **3306·6379는 Worker SG(소스=Worker SG
+  ID)에서만** 허용. 22는 미개방(SSM Session Manager로 관리). 8080·8081은 인바운드 없음. Caddy는 Compose
+  네트워크 안에서 `api:8080`으로 프록시하고(`Caddyfile`), 호스트 포트는 `127.0.0.1`에만 바인딩돼
+  공인 인터페이스로는 열리지 않는다(`docker-compose.aws-api.yml`).
+- **Worker SG 인바운드**: 없음(SSM으로만 관리). 아웃바운드는 전체 허용(Anthropic/OpenAI/S3/DB/Redis/ECR).
+- **3306·6379가 인터넷에 열려 있지 않은지 검증(배포 후 확인 필요)**:
+  1. 외부 호스트에서 `nc -vz <api-공인ip> 3306`, `6379` → 타임아웃/거부여야 정상.
+  2. `nmap -Pn -p 3306,6379 <api-공인ip>` → filtered/closed.
+  3. Worker EC2 안에서 `nc -vz <api-사설ip> 3306`, `6379` → 성공해야 정상.
+  4. `aws ec2 describe-security-groups`로 3306/6379 규칙에 `0.0.0.0/0` 소스가 없는지 확인.
+
+---
+
+## 8. 공인 IP 변경 시 재기동 절차
+
+EC2를 중지 후 시작하면 **공인 IP만** 바뀐다(Elastic IP를 안 쓰므로) - **사설 IP는 그대로
+유지**되므로 Worker↔API의 DB/Redis 연결(사설 IP 기반)은 영향받지 않는다.
+
+1. 새 공인 IP 확인: `curl http://169.254.169.254/latest/meta-data/public-ipv4`(API EC2 안에서,
+   IMDSv2 토큰 필요 - §2 참고) 또는 콘솔.
+2. `/opt/autique/.env`의 `SITE_ADDRESS`를 `<새IP-하이픈>.sslip.io`로 갱신.
+3. `docker compose -f docker-compose.aws-api.yml up -d caddy` - 새 호스트명으로 Let's Encrypt
+   인증서가 자동 재발급된다.
+4. `https://<새IP>.sslip.io/actuator/health` 접속 확인.
+5. 프론트 담당자에게 새 API base URL 전달 → 프론트 재배포/설정 갱신.
+6. 프론트 오리진이 바뀌지 않았다면 **CORS·카카오 콘솔 설정은 그대로 둔다**(§6).
+7. Worker는 API 사설 IP를 그대로 쓰므로 보통 아무 것도 바꿀 필요 없다. (드물게 API/Worker
+   인스턴스 자체를 재생성한 경우에만 Worker의 `worker.env`에 있는 DB/Redis 호스트를 새 사설 IP로
+   갱신하고 재배포한다.)
+
+---
+
+## 9. 배포 후 리허설 (실사용자 3명: 판매자 1 + 입찰자 2)
+
+카카오 계정 3개 필요: 판매자 S, 입찰자 B1, 입찰자 B2(서로 다른 계정).
+
+1. **등록 장면(S)**: 실제 사진 → (S 로그인 후) analyze → `POST /api/products`로 상품·첫 경매
+   등록 → 입력한 시작/종료 시각이 그대로 조회되는지 → 시작 시각 이후 `SCHEDULED→LIVE` 전환
+   확인. **첫 경매 최소 진행시간 1시간 정책(`AuctionSchedulePolicy.MIN_DURATION`) 그대로** - 종료
+   시각은 시작+최소 1시간 이후로 등록한다(정책 변경 없음).
+2. **종료 임박 경매(발표 전 미리 준비)**: 발표 중 입찰·낙찰을 보여주려면, 1과 별도로 **발표보다
+   충분히 앞서(예: 발표 2~3시간 전)** S가 새 경매를 등록하되 종료 시각을 발표 시점 근처로
+   맞춘다(최소 1시간 정책상 시작~종료 간격이 필요해 미리 등록해야 한다).
+3. **입찰/낙찰(B1, B2)**: 각자 로그인해 종료 임박 경매에 입찰 → 한 명은 자동입찰 등록 → 종료
+   후 낙찰자 확인 → 판매자/낙찰자의 **앱 내 알림 목록**(`NotificationController`) 확인. 푸시
+   알림 구현은 범위 밖.
+4. **AI 실 처리 확인**: 1의 analyze가 Worker에서 실제로 소비·완료돼 폴링 상태가
+   `AWAITING_USER_CONFIRMATION`(COMPLETED 전 단계)이 되는지 `scripts/aws/smoke-analyze.sh` 또는
+   프론트로 확인.
+
+> 이 절 전체는 실제 배포된 환경이 있어야 실행 가능하다 - "배포 후 확인 필요".
+
+---
+
+## 10. 발표 후 자원 중지/비용 관리
+
+1. EC2 API·Worker **중지(Stop)** - 컴퓨트·공인 IPv4 과금 정지, EBS(`mysql-data` 포함)는 유지된다
+   (**terminate 금지** - 볼륨이 사라지면 시연 데이터도 사라진다).
+2. 다음 발표 전 **Start** → §8 절차로 새 공인 IP 반영.
+3. 완전히 정리할 때: ECR 이미지 삭제, EC2 terminate, EBS 볼륨/ENI/보안그룹 삭제, SSM 파라미터/
+   IAM 역할/OIDC provider 정리. 삭제된 리소스 ID나 테스트용 자격증명은 다음에 재사용하지 않는다.
+
+---
+
+## 11. 남은 막힘 / 후속 검토
+
+- **AWS 자원 생성·실제 배포·URL 검증**: 로컬 자격증명 만료로 이번 세션에서 수행하지 못했다.
+- **프론트 저장소 없음**: `CORS_ALLOWED_ORIGINS`·카카오 등록 도메인·프론트 API base URL의 실제
+  값은 프론트 배포 주소가 나와야 채울 수 있다.
+- **로그인 사용자별 AI 호출 과금 상한**: `POST /api/products/analyze` 인증 필수화로 익명 남용은
+  막았지만, 로그인한 사용자가 반복 호출하는 것까지는 막지 않는다. 필요하면 최소한의 요청 제한
+  (새 라이브러리 추가는 승인 필요 - CLAUDE.local.md)을 별도로 검토한다.
+- **메모리 실측**: `docker stats`로 t3.medium/t3.small 여유를 확인하기 전에는 더 작은 인스턴스로
+  낮추지 않는다.
+- **CloudWatch 로그 수집**: 이번 범위에 포함하지 않았다 - 필요하면 `awslogs` 로깅 드라이버를
+  compose에 추가하는 후속 작업으로 남긴다.
+
+---
+
+## 12. #127: 분석 세션 취소 기능 배포 절차
+
+`product_analysis_session`에 `CANCELLED` 상태와 `cancelled_at`/`registered_at` 컬럼이 추가됐다.
+이 기능은 **DB 마이그레이션 적용(사람이 직접) → Worker 검증 완료 → API 배포**(이 둘은
+`scripts/aws/deploy.sh`가 자동으로 이 순서·조건을 지킨다) **→ 프론트 연동(별도 작업)** 순서로
+내보낸다.
+
+### 0) 자동 배포 파이프라인이 실제로 보장하는 것
+
+`scripts/aws/deploy.sh`를 아래처럼 바꿔, 자동 배포 1회 실행 안에서 이 순서와 안전장치가 항상
+지켜지게 했다(코드로 강제 - 사람이 순서를 기억해야 하는 절차가 아니다):
+
+- **사전 검증 게이트(컨테이너 교체 전, 읽기 전용)**: API EC2 위 MySQL에 SSM으로 접속해
+  `product_analysis_session`의 `cancelled_at`/`registered_at` 컬럼 존재와 `status` ENUM의
+  `CANCELLED` 포함 여부를 `information_schema`로만 확인한다(`ALTER`를 전혀 실행하지 않는다).
+  **셋 중 하나라도 불충족이면(컬럼만 있고 ENUM이 이전 정의인 경우 포함) API/Worker 컨테이너를
+  하나도 바꾸지 않고 배포 자체를 중단**한다(종료 코드 4). DB 접속 실패·쿼리 실패도 동일하게
+  실패로 처리한다. 실패 메시지는 아래 1)의 SQL을 먼저 적용하라고 안내한다.
+- **배포 순서**: 게이트를 통과하면 `deploy_and_verify()`가 **Worker를 먼저** 배포하고
+  `/actuator/health` UP까지 확인한 뒤에만 **API**를 배포한다. Worker 배포·검증이 실패하면
+  즉시 중단하고 API는 전혀 시도하지 않는다(기존 이미지 태그 처리·헬스체크·실패 시 롤백 로직은
+  그대로 - Worker/API 두 역할을 같은 순서로 롤백한다).
+
+이 변경은 실제로 수정·검증됐다(§12 끝의 "검증 내역" 참고) - 아래 1)~3)은 그 위에서 사람이 할
+일만 남은 절차다.
+
+### 1) DB 마이그레이션 적용 (배포 파이프라인 외부, 사람이 직접)
+
+SQL 파일: `backend/scripts/migrations/127-cancel-image-analysis.sql` (검증 내역은 파일 상단
+주석 참고 - mysql:8.4.10 컨테이너에 #127 이전 스키마를 기존 행과 함께 재현한 뒤 이 SQL을
+그대로 적용/재실행해 확인했다).
+
+**이 파일은 `DELIMITER`를 포함한 mysql CLI 전용 스크립트다.** JDBC로 직접 실행하거나 내용을
+한 줄로 합쳐 `-e`로 넘기면 안 되고, `mysql` 클라이언트가 파일을 그대로 읽게 해야(`mysql ... <
+파일`) `DELIMITER` 재정의가 올바르게 적용된다.
+
+```bash
+# AWS 시연 환경: API EC2에서 (MySQL은 API EC2 위 컨테이너, docker-compose.aws-api.yml 참고)
+cd /opt/autique
+docker compose -f docker-compose.aws-api.yml exec -T mysql \
+  mysql -uroot -p"$MYSQL_ROOT_PASSWORD" autique \
+  < backend/scripts/migrations/127-cancel-image-analysis.sql
+# $MYSQL_ROOT_PASSWORD는 /opt/autique/api.env의 값(source api.env로 불러오거나 직접 입력)
+```
+
+```bash
+# 로컬 개발 환경
+docker exec -i autique-local-mysql \
+  mysql -uroot -p"${MYSQL_ROOT_PASSWORD:-localpw}" autique_local \
+  < backend/scripts/migrations/127-cancel-image-analysis.sql
+```
+
+적용 후 바로 확인:
+```sql
+SHOW CREATE TABLE product_analysis_session\G
+-- cancelled_at, registered_at 컬럼이 있는지
+-- status ENUM 허용값 목록에 'CANCELLED'가 포함돼 있는지
+```
+
+### 2) Worker가 먼저 배포되고 검증된다 (자동, `deploy_and_verify()`가 보장)
+
+`AnalysisStatus`는 `@Enumerated(EnumType.STRING)`으로 저장된다. 구 버전 Worker의
+`AnalysisStatus` enum에는 `CANCELLED` 상수가 없으므로, API가 먼저 취소를 허용해
+`status='CANCELLED'`인 행이 생기면 구 Worker가 그 행을 `claim`/`reclaim`하려고 읽는 순간
+(`findByIdForUpdate`) Hibernate가 `IllegalArgumentException: No enum constant ...CANCELLED`로
+하이드레이션에 실패한다. `deploy_and_verify()`가 Worker를 먼저 배포해 `/actuator/health` UP을
+확인한 뒤에만 API를 배포하므로(실패 시 API 미시도), 이 창은 자동 배포 경로에서는 생기지 않는다.
+
+### 3) API 배포 뒤, 프론트 연동은 별도로 맞춘다
+
+`CreateProductRequest.analysisId`가 `@NotNull`로 추가됐다. **이 백엔드 파이프라인 수정은
+API/Worker 배포 순서와 DB 사전 검증만 다룬다 - 프론트가 `analysisId`를 보내도록 바꾸는 작업,
+X 버튼을 취소 API에 연결하는 작업은 이 파이프라인과 무관하게 별도로 배포해야 한다.** 새 API가
+공개됐는데 프론트가 아직 `analysisId`를 보내지 않으면 `POST /api/products`가 전부 400으로
+실패한다 - API 배포와 프론트 배포 사이의 공백을 최소화하도록 운영자가 직접 맞춘다(§6 참고, 이
+파이프라인은 프론트를 배포하지 않는다).
+
+### 4) 자동 롤백과 이미지 호환성
+
+배포 실패 시 자동 롤백은 `backend/Dockerfile`의 `com.autique.compat.analysis-cancellation="supported"`
+라벨이 있는 이미지로만 수행된다(DB에 CANCELLED 행이 있는지 조회해서 판정하지 않는다 - 지금
+시도 중인 배포가 막 그 행을 만들었을 수 있어서다). 라벨이 없거나, 값이 다르거나, pull/inspect
+자체가 실패하면 비호환으로 간주해 **API/Worker 컨테이너를 하나도 바꾸지 않고** 배포를 실패로
+끝낸다(기존 종료 코드 규칙 그대로 - last-known-good도 갱신되지 않는다).
+
+- **#127을 처음 배포할 때**: 기존 last-known-good가 #127 이전(라벨 없음) 이미지라서, 이 첫 배포가
+  실패하면 자동 롤백이 차단된다. 복구는 되돌리기가 아니라 **앞으로 고치기** - #127이 포함된(라벨
+  있는) 이미지를 다시 배포해 성공시킨다.
+- **#127이 성공적으로 배포돼 last-known-good가 라벨 있는 이미지로 바뀐 뒤**: 그 이후의 배포
+  실패는 평소처럼 자동 롤백된다(롤백 대상도 라벨 있는 이미지이므로 통과).
+- **차단됐을 때의 복구**: 로그의 `ROLLBACK_BLOCKED`/`ROLLBACK_BLOCKED_INCOMPATIBLE`를 확인하고,
+  `backend/Dockerfile`을 포함한 현재 코드로 새로 빌드한(라벨이 있는) 이미지를 다시 배포한다.
+  취소 데이터를 지우거나 상태를 되돌리거나 스키마를 되돌려서 해결하지 않는다.
+
+### 검증 내역 (이번에 실제로 확인한 것)
+
+- `bash -n scripts/aws/deploy.sh` 통과.
+- 사전 검증 게이트의 SQL/판정 로직을 `scripts/aws/deploy.sh`에서 그대로 추출해 로컬
+  mysql:8.4.10 컨테이너로 3가지 스키마 상태에 대해 확인: (1) #127 이전 스키마 → 실패
+  (`missing_columns`), (2) `cancelled_at`/`registered_at`만 추가되고 ENUM은 이전 정의인 상태
+  → 실패(`status_enum_missing_CANCELLED`, 컬럼만 있는 상태도 실패로 판정되는 것을 확인), (3)
+  `backend/scripts/migrations/127-cancel-image-analysis.sql` 적용 후 → 성공.
+- `deploy_and_verify()`/`verify_schema_migration_applied()`를 스크립트에서 그대로 추출해
+  `run_ssm_script`만 스텁으로 바꾼 로컬 하네스로 제어 흐름 확인: Worker 배포 실패 시 API 배포
+  호출 자체가 일어나지 않음, Worker 성공 시에만 API가 Worker보다 뒤에 호출됨, schema-check
+  실패 시 마이그레이션 SQL 경로를 안내하는 메시지와 함께 1을 반환함.
+- `check_rollback_image_compatibility()`를 스크립트에서 그대로 추출해 로컬 Docker 레지스트리
+  (`registry:2`, ECR 인증만 스텁)에 올린 테스트 이미지 2개(라벨 있음/없음)로 확인: 라벨 있는
+  이미지 → 허용, 라벨 없는 이미지 → 차단(`<missing>`), 존재하지 않는 태그(pull 실패) → 차단,
+  ECR 로그인 실패 → 차단. 이어서 전체 롤백 블록을 그대로 추출해 호환성 판정 결과별 통합 동작도
+  확인: 비호환 판정 시 `deploy_and_verify`(컨테이너 교체)가 전혀 호출되지 않고 last-known-good도
+  갱신되지 않은 채 exit 2로 끝남, 호환 판정이면 기존처럼 재배포가 시도되고 그 성공/실패 처리는
+  변경 전과 동일함(exit 1/exit 2).
+- 실제 AWS(SSM/EC2)나 운영 DB에는 연결하지 않았다 - 전부 로컬 Docker/스텁 함수로 검증했다.
+
+### 적용 후 확인 항목
+
+- [ ] `product_analysis_session`에 `cancelled_at`, `registered_at` 컬럼 존재
+- [ ] `status` ENUM 허용값 목록에 `CANCELLED` 포함 (`SHOW CREATE TABLE`) - 둘 다 충족해야
+  자동 배포의 사전 검증 게이트를 통과한다(컬럼만 있고 ENUM이 이전 정의인 상태는 게이트가 실패로
+  판정한다)
+- [ ] Worker `/actuator/health` UP (신규 코드로 기동, API보다 먼저 확인됨)
+- [ ] API `/actuator/health` UP (신규 코드로 기동)
+- [ ] 프론트: 상품 등록 요청에 `analysisId` 전달 확인, X 버튼 → 취소 API 연동 확인(이 파이프라인
+  과 별개로 프론트 쪽에서 직접 확인해야 한다)

@@ -89,7 +89,7 @@ flowchart LR
 - **사용자**: 구매 목표 확인과 결제 승인
 - **서버**: 시세 계산과 입찰 상한 제한
 
-후보 순위, 입찰 직전 시세 재계산, 미낙찰 시 재탐색, 기한 만료까지 포함한 전체 흐름은 [docs/ai-purchase-agent.md](docs/ai-purchase-agent.md#전체-동작-흐름)에 있습니다.
+후보 순위, 입찰 직전 시세 재계산, 미낙찰 시 재탐색, 기한 만료까지 포함한 전체 흐름은 [docs/purchase-agent/ai.md](docs/purchase-agent/ai.md#전체-동작-흐름)에 있습니다.
 
 ## 주요 설계 결정과 검증 결과
 
@@ -97,13 +97,13 @@ flowchart LR
 
 | 문제 | 선택과 이유 | 자세히 |
 | --- | --- | --- |
-| 동시 입찰 시 데이터 정합성 | 비관적 락(`SELECT ... FOR UPDATE`)으로 같은 경매의 변경을 직렬화. 경합 지점이 MySQL row 하나라 분산 락은 쓰지 않음 | [실험](docs/experiments/concurrency/summary.md) |
-| 같은 요청의 중복 처리 | 재시도 중복은 Idempotency-Key, 동시 수정은 락으로 따로 막음. 서로 대체할 수 없는 문제 | [설계 기록](docs/backend-design.md) |
-| 낙찰 결과와 실제 상태의 불일치 | 결과를 저장하지 않고 경매·주문·차순위 상태로 조회마다 계산 | [설계 기록](docs/backend-design.md) |
-| 연장된 경매의 조기 종료 | 스케줄러가 경매를 잠근 뒤 다시 읽은 최신 종료 시각으로 판정 | [설계 기록](docs/backend-design.md) |
+| 동시 입찰 시 데이터 정합성 | 비관적 락(`SELECT ... FOR UPDATE`)으로 같은 경매의 변경을 직렬화. 경합 지점이 MySQL row 하나라 분산 락은 쓰지 않음 | [실험](docs/backend/experiments/concurrency/summary.md) |
+| 같은 요청의 중복 처리 | 재시도 중복은 Idempotency-Key, 동시 수정은 락으로 따로 막음. 서로 대체할 수 없는 문제 | [설계 기록](docs/backend/overview.md) |
+| 낙찰 결과와 실제 상태의 불일치 | 결과를 저장하지 않고 경매·주문·차순위 상태로 조회마다 계산 | [설계 기록](docs/backend/overview.md) |
+| 연장된 경매의 조기 종료 | 스케줄러가 경매를 잠근 뒤 다시 읽은 최신 종료 시각으로 판정 | [설계 기록](docs/backend/overview.md) |
 | 사진 분석 대기 시간 | 분석 단계 병렬 실행과 단계별 모델 분리(가벼운 판정 Haiku, 작은 글씨 판독 Sonnet) | [AI 시스템](docs/ai-system.md) |
 | AI의 근거 없는 값 생성 | 초안으로만 제공하고, 근거 검증과 사용자 확인을 거침 | [Vision 설계](docs/ai-vision-agent.md) |
-| 판매자 입력값에 따른 입찰 상한 왜곡 | 판매자 값 대신 서버가 다시 계산한 시세로 상한 제한 | [Purchase Agent](docs/ai-purchase-agent.md) |
+| 판매자 입력값에 따른 입찰 상한 왜곡 | 판매자 값 대신 서버가 다시 계산한 시세로 상한 제한 | [Purchase Agent](docs/purchase-agent/ai.md) |
 | 해외 시세에 의한 가격 왜곡 | 국내 중고 매물 가격을 기준으로 하고 eBay는 참고로만 표시 | [가격 계산](docs/ai-pricing-agent.md) |
 | 크롤링 차단 | 우회하지 않고 수집 중단. 이미 모은 원본을 다시 분석해 커버리지 확대 | [AI 시스템](docs/ai-system.md) |
 
@@ -144,7 +144,7 @@ export ANTHROPIC_API_KEY=<Anthropic 키>          # 없으면 기동은 되지�
 ```
 
 서버는 `http://localhost:8080`에서 뜹니다. API 문서는 `http://localhost:8080/swagger-ui/index.html`, 상태 확인은 `http://localhost:8080/actuator/health`에서 볼 수 있습니다.
-S3 업로드를 쓰려면 `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `CLOUD_AWS_S3_BUCKET`도 넣어야 합니다. 전체 환경변수는 [docs/deployment-config.md](docs/deployment-config.md)에 정리되어 있습니다.
+S3 업로드를 쓰려면 `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `CLOUD_AWS_S3_BUCKET`도 넣어야 합니다. 전체 환경변수는 [docs/deployment/configuration.md](docs/deployment/configuration.md)에 정리되어 있습니다.
 
 ### 크롤러 실행
 
@@ -210,20 +210,33 @@ crawler/
 - API EC2: `dev,api` 프로필, 앞단에 Caddy가 HTTPS를 처리합니다
 - Worker EC2: `dev,worker` 프로필, 분석 큐 소비와 Vision 호출을 맡습니다
 
-자원 구성과 비밀값 설정은 [docs/aws-demo-deployment.md](docs/aws-demo-deployment.md)를 참고하세요.
+자원 구성과 비밀값 설정은 [docs/deployment/runbook.md](docs/deployment/runbook.md)를 참고하세요.
 
 ## 상세 문서
 
-| 문서 | 내용 |
-| --- | --- |
-| [docs/auction-api-spec-final.md](docs/auction-api-spec-final.md) | 경매 API 최종 계약 |
-| [docs/api-spec.md](docs/api-spec.md) | 전체 API 명세 |
-| [docs/ai-system.md](docs/ai-system.md) | AI 시스템 전체 (크롤링 → Vision → 가격 → 추천 → Purchase Agent), 현재 상태와 실측 수치 |
-| [docs/ai-vision-agent.md](docs/ai-vision-agent.md) | Vision 프롬프트 설계, 평가 하네스, 벤더 비교 |
-| [docs/ai-pricing-agent.md](docs/ai-pricing-agent.md) | 가격 계산과 시세 측정 |
-| [docs/ai-purchase-agent.md](docs/ai-purchase-agent.md) | Purchase Agent AI 파트 |
-| [docs/ai-async-analysis.md](docs/ai-async-analysis.md) | Redis Streams 비동기 분석과 장애 복구 |
-| [docs/deployment-config.md](docs/deployment-config.md) | 배포 환경변수, 포트 구성 |
-| [docs/experiments/concurrency/summary.md](docs/experiments/concurrency/summary.md) | 입찰 동시성 제어 실험 결과 |
-| [docs/backend-design.md](docs/backend-design.md) | 백엔드 설계 기록 전문 (동시성, 자동입찰, 낙찰·차순위, 경매 스케줄러) |
-| [docs/ai-adr.md](docs/ai-adr.md) | AI 쪽 설계 결정 기록 |
+처음이라면 두 입구 문서로 시작하세요 — 백엔드 전체 동작은 [docs/backend/overview.md](docs/backend/overview.md), AI 전체는 [docs/ai-system.md](docs/ai-system.md).
+
+**백엔드**
+- [docs/backend/overview.md](docs/backend/overview.md) — 백엔드 전체 안내(도메인·주요 흐름·프로필·핵심 설계·한계)
+
+**Purchase Agent**
+- [docs/purchase-agent/backend.md](docs/purchase-agent/backend.md) — 백엔드 상세(상태 전이·탐색·트랜잭션·결과 판정)
+- [docs/purchase-agent/ai.md](docs/purchase-agent/ai.md) — AI 파트(파서·Matcher·시세 provider·평가 수치)
+
+**AI** (경로 유지)
+- [docs/ai-system.md](docs/ai-system.md) — AI 시스템 전체(크롤링 → Vision → 가격 → 추천 → Purchase Agent)
+- [docs/ai-vision-agent.md](docs/ai-vision-agent.md) · [docs/ai-pricing-agent.md](docs/ai-pricing-agent.md) · [docs/ai-async-analysis.md](docs/ai-async-analysis.md) · [docs/ai-adr.md](docs/ai-adr.md)
+
+**API**
+- [docs/api/spec.md](docs/api/spec.md) — 전체 API 명세
+- [docs/api/auction-spec.md](docs/api/auction-spec.md) — 경매 도메인 계약(FROZEN)
+- [docs/api/auction-audit.md](docs/api/auction-audit.md) — 계약 대비 구현 상태·해결 이력
+
+**배포**
+- [docs/deployment/runbook.md](docs/deployment/runbook.md) — 배포 절차(최초 구축·일반 배포·스키마 변경·롤백)
+- [docs/deployment/configuration.md](docs/deployment/configuration.md) — 환경변수·프로필·포트·관리 엔드포인트 참조
+
+**실험**
+- [docs/backend/experiments/concurrency/summary.md](docs/backend/experiments/concurrency/summary.md) — 입찰 동시성 제어 실험
+- [docs/backend/experiments/hot-auction-load/summary.md](docs/backend/experiments/hot-auction-load/summary.md) — 인기 경매 부하 테스트
+- [docs/backend/experiments/manual-bid-smoke-test.md](docs/backend/experiments/manual-bid-smoke-test.md) — 수동 입찰 단일 요청 스모크
