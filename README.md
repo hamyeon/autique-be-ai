@@ -212,28 +212,6 @@ crawler/
 
 자원 구성과 비밀값 설정은 [docs/deployment/runbook.md](docs/deployment/runbook.md)를 참고하세요.
 
-## 상세 문서
-
-처음이라면 두 입구 문서로 시작하세요 — 백엔드 전체 동작은 [docs/backend/overview.md](docs/backend/overview.md), AI 전체는 [docs/ai-system.md](docs/ai-system.md).
-
-**백엔드**
-- [docs/backend/overview.md](docs/backend/overview.md) — 백엔드 전체 안내(도메인·주요 흐름·프로필·핵심 설계·한계)
-
-**Purchase Agent**
-- [docs/purchase-agent/backend.md](docs/purchase-agent/backend.md) — 백엔드 상세(상태 전이·탐색·트랜잭션·결과 판정)
-- [docs/purchase-agent/ai.md](docs/purchase-agent/ai.md) — AI 파트(파서·Matcher·시세 provider·평가 수치)
-
-**AI** (경로 유지)
-- [docs/ai-system.md](docs/ai-system.md) — AI 시스템 전체(크롤링 → Vision → 가격 → 추천 → Purchase Agent)
-- [docs/ai-vision-agent.md](docs/ai-vision-agent.md) · [docs/ai-pricing-agent.md](docs/ai-pricing-agent.md) · [docs/ai-async-analysis.md](docs/ai-async-analysis.md) · [docs/ai-adr.md](docs/ai-adr.md)
-
-**API**
-- [docs/api/spec.md](docs/api/spec.md) — 전체 API 명세
-- [docs/api/auction-spec.md](docs/api/auction-spec.md) — 경매 도메인 계약(FROZEN)
-- [docs/api/auction-audit.md](docs/api/auction-audit.md) — 계약 대비 구현 상태·해결 이력
-
-**배포**
-- [docs/deployment/runbook.md](docs/deployment/runbook.md) — 배포 절차(최초 구축·일반 배포·스키마 변경·롤백)
 - [docs/deployment/configuration.md](docs/deployment/configuration.md) — 환경변수·프로필·포트·관리 엔드포인트 참조
 
 **실험**
