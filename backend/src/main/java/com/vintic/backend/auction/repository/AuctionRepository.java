@@ -113,16 +113,27 @@ public interface AuctionRepository extends JpaRepository<Auction, Long> {
             """)
     Slice<Auction> findListByStatuses(@Param("statuses") List<AuctionStatus> statuses, Pageable pageable);
 
-    // #143: 마이페이지 "나의 경매" - 이 사용자가 판매자인(product.seller) 경매. 상품이 아니라 경매 단위라
-    // 재경매로 생긴 경매도 각각 한 행이다. 정렬은 기본 목록과 같다(생성 시각 최신순, 같으면 id 내림차순).
+    // #143: 마이페이지 "나의 경매" - 이 사용자가 참여한 경매. 참여 = (1) 이 사용자의 Bid가 하나라도 있다
+    // (직접 입찰이든 자동입찰 엔진이 대신 넣은 입찰이든) 또는 (2) 취소되지 않은 현재 자동입찰 설정
+    // (activeSlot = true: RESERVED/ACTIVE/CAP_REACHED, 구매 에이전트가 만든 설정 포함)이 있다.
+    // CANCELED 설정만 있고 Bid가 없으면 참여로 보지 않는다(사용자가 실제 입찰 전에 중단한 경우). 판매자라는
+    // 사실만으로는 포함되지 않는다. 경매와 상태가 바뀌어도(종료·취소) 설정은 CANCELED로 바뀌지 않으므로
+    // 예약만 해 둔 경매가 취소된 경우도 과거 목록에 남는다.
+    // 참여 판정을 EXISTS로 하므로 입찰·설정이 여러 건이어도 경매당 한 행이다 - 페이지(LIMIT)가 중복 없이
+    // 적용돼 size/hasNext가 정확하다. 정렬은 기본 목록과 같다(경매 생성 시각 최신순, 같으면 id 내림차순).
     @Query("""
             select a from Auction a
-            join fetch a.product p
-            where p.seller.id = :sellerId and a.status in :statuses
+            join fetch a.product
+            where a.status in :statuses
+              and (
+                exists (select 1 from Bid b where b.auction = a and b.user.id = :userId)
+                or exists (select 1 from AutoBidSetting s
+                           where s.auction = a and s.user.id = :userId and s.activeSlot = true)
+              )
             order by a.createdAt desc, a.id desc
             """)
-    Slice<Auction> findBySellerAndStatuses(
-            @Param("sellerId") Long sellerId,
+    Slice<Auction> findParticipatedByUserAndStatuses(
+            @Param("userId") Long userId,
             @Param("statuses") List<AuctionStatus> statuses,
             Pageable pageable
     );

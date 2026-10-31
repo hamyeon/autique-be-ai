@@ -79,7 +79,7 @@ Base URL : https://<api-공인IP-하이픈>.sslip.io
 | `GET /api/orders/{id}` · `POST /api/orders/{id}/pay` (주문 조회·결제) | 주문 소유자(아니면 `40304`) |
 | `GET /api/backup-offers/{id}` · `POST .../accept` · `POST .../decline` (차순위) | 제안 candidate 본인(아니면 `40305`). accept는 Idempotency-Key |
 | `GET /api/me/penalties` (내 페널티) | 본인 |
-| `GET /api/me` (내 정보) · `GET /api/me/auctions` (나의 경매 — 판매 등록) · `GET /api/me/likes` (관심 목록) (#143) | 본인 데이터만(다른 사용자 지정 불가) |
+| `GET /api/me` (내 정보) · `GET /api/me/auctions` (나의 경매 — 내가 참여한 경매) · `GET /api/me/likes` (관심 목록) (#143) | 본인 데이터만(다른 사용자 지정 불가) |
 | `POST /api/products/analyze` · `POST /api/products/photos` · `GET /api/products/analyze/{taskId}` · `POST /api/products/analyze/{taskId}/cancel` · `POST /api/products/calculate-price` · `POST /api/products` (상품 등록) | 분석 세션 소유자(타인 조회/취소는 `404`) |
 | `POST /api/purchase-goals/parse` · `POST` · `GET` · `GET /{id}` · `GET /{id}/matches` · `DELETE /{id}` `/api/purchase-goals` (구매 목표) | 목표 소유자. `{id}`가 없으면 `404`/`40406`, 다른 사용자 목표면 `403`/`40306`(상세·평가 이력·취소 공통). 상세는 "# 구매 목표(Purchase Agent) API" 절 |
 | `GET /api/notifications` · `PATCH /api/notifications/{id}/read` · `GET /api/notifications/unread-count` (알림) | 본인 알림(아니면 `40405`) |
@@ -1930,24 +1930,34 @@ dev/prod에서 토큰 없이 호출하면 `401`(`40101`)이고, `X-User-Id` 헤�
 
 프로필 사진 조회·수정은 이 API에 없습니다.
 
-## GET /api/me/auctions — 나의 경매(내가 판매 등록한 경매)
+## GET /api/me/auctions — 나의 경매(내가 참여한 경매)
 
-내가 **판매자**인 경매 목록입니다(내가 입찰한 경매가 아님). 상품이 아니라 **경매 단위**이므로 재경매한 상품은 경매마다 따로 나옵니다.
+내가 **참여한** 경매 목록입니다. 참여 기준은 다음 둘 중 하나입니다.
+
+1. 이 경매에 **내 입찰 기록**이 하나라도 있다 — 직접 입찰이든, 자동입찰(구매 에이전트가 등록한 자동입찰 포함)이 대신 넣은 입찰이든.
+2. 이 경매에 **취소되지 않은 내 자동입찰 설정**이 있다 — `RESERVED`(예약)·`ACTIVE`·`CAP_REACHED`. 구매 에이전트가 등록한 자동입찰도 같다.
+
+- 자동입찰을 걸었다가 **입찰이 생기기 전에 중단**(`DELETE .../auto-bids/me`, 설정이 `CANCELED`)했다면 참여로 보지 않습니다.
+  중단 전에 자동입찰이 실제로 입찰했다면 1번으로 포함됩니다.
+- **판매자라는 이유로는 포함되지 않습니다**(판매자는 자기 경매에 입찰할 수 없음). 판매 관리용 목록은 제공하지 않습니다.
+- 여러 번 입찰하거나 직접·자동입찰을 함께 써도 **경매당 한 번**만 나옵니다. 중복은 조회 단계에서 생기지 않으므로 `size`와 `hasNext`는
+  경매 수 기준으로 정확합니다.
+- 경매가 끝나거나 취소돼도 자동입찰 설정은 `CANCELED`로 바뀌지 않으므로, 자동입찰을 예약해 둔 경매가 판매자에 의해 취소되면 `past`에 나옵니다.
 
 | Query | 기본 | 허용 | 설명 |
 | --- | --- | --- | --- |
-| `state` | `current` | `current` / `past` | `current` = `SCHEDULED`·`LIVE`, `past` = `ENDED`·`CANCELED`. 그 외 값은 `400`/`40001` |
+| `state` | `current` | `current` / `past` | `current` = 참여 중인 `SCHEDULED`·`LIVE` 경매, `past` = 참여했던 `ENDED`·`CANCELED` 경매(낙찰·패찰 모두). 그 외 값은 `400`/`40001` |
 | `page` | `0` | `0` 이상 | 0부터 |
 | `size` | `20` | `1`~`50` | |
 
 - 정렬: 경매 생성 시각(`auctions.created_at`) 최신순 → 경매 ID 내림차순.
 - 응답 형식은 기본 경매 목록(auction-spec §24)과 같습니다: `items`(카드) / `page` / `size` / `hasNext`. 빈 결과·마지막 페이지를 넘긴 `page`는
   `items: []`, `hasNext: false`(200).
-- 카드 필드는 auction-spec §23과 같습니다. `isLiked`는 판매자 본인이 그 경매에 관심을 눌렀는지입니다.
-- **종료 경매의 가격:** `currentPrice`는 경매가 끝난 시점의 최고 입찰가이고, 입찰이 없었으면 `startPrice`와 같습니다(유찰).
-  취소된 경매는 시작 전에만 취소되므로 `startPrice`와 같습니다. `currentPrice`는 **실제 판매 금액이 아닐 수 있습니다** —
-  낙찰자가 포기해 차순위 구매자가 수락하면 실제 주문 금액은 차순위 금액입니다. 판매 성사 여부·실제 금액은 이 목록에 없습니다
-  (경매 상세 `finalPrice`는 종료 + 낙찰자가 있을 때의 `currentPrice`입니다).
+- 카드 필드는 auction-spec §23과 같습니다. `isLiked`는 내가 그 경매에 관심을 눌렀는지입니다.
+- **종료 경매의 가격:** `currentPrice`는 경매의 가격(종료 시점 최고 입찰가)이며 **내 입찰가가 아닙니다**. 취소된 경매는 시작 전에만
+  취소되므로 `startPrice`와 같습니다. **낙찰·패찰 여부와 내 결제 금액은 이 목록에 없습니다** — `GET /api/auctions/{auctionId}/result`
+  (auction-spec §10)의 `result`·`myLastBidAmount`·`finalPrice`·`orderId`를 쓰세요. 낙찰자가 포기해 차순위 구매자가 수락한 경우처럼
+  실제 주문 금액이 `currentPrice`와 다를 수 있으므로 `currentPrice`를 결제 금액으로 쓰지 마세요.
 
 ```http
 GET /api/me/auctions?state=past&page=0&size=20
@@ -1963,7 +1973,7 @@ Authorization: Bearer {accessToken}
         "auctionId": 31, "productId": 21, "brand": "Nike", "name": "Nike Dunk Low Panda",
         "thumbnailUrl": "https://{bucket}.s3.ap-northeast-2.amazonaws.com/{key}?X-Amz-...",
         "status": "ENDED", "grade": "A", "startPrice": 10000, "currentPrice": 25000,
-        "likeCount": 1, "isLiked": false
+        "likeCount": 1, "isLiked": true
       }
     ],
     "page": 0, "size": 20, "hasNext": false

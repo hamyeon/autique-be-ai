@@ -39,13 +39,14 @@ public class MyAuctionQueryService {
         this.auctionCardAssembler = auctionCardAssembler;
     }
 
-    // "나의 경매" = 내가 판매 등록한 경매(입찰한 경매가 아니다). state: current(SCHEDULED/LIVE) |
-    // past(ENDED/CANCELED). 경매 생성 시각 최신순, 같으면 경매 id 내림차순.
+    // "나의 경매" = 내가 참여한 경매(내 입찰이 있거나 취소되지 않은 내 자동입찰 설정이 있는 경매 - 판정 기준은
+    // AuctionRepository.findParticipatedByUserAndStatuses). 판매 등록한 경매가 아니다.
+    // state: current(SCHEDULED/LIVE) | past(ENDED/CANCELED, 낙찰·패찰 모두). 경매 생성 시각 최신순, 같으면 id 내림차순.
     @Transactional(readOnly = true)
-    public AuctionListResponse getMySellingAuctions(Long userId, String state, int page, int size) {
+    public AuctionListResponse getMyParticipatedAuctions(Long userId, String state, int page, int size) {
         List<AuctionStatus> statuses = statusesOf(state);
         AuctionListQueryService.validatePage(page, size);
-        Slice<Auction> slice = auctionRepository.findBySellerAndStatuses(userId, statuses, PageRequest.of(page, size));
+        Slice<Auction> slice = auctionRepository.findParticipatedByUserAndStatuses(userId, statuses, PageRequest.of(page, size));
         return new AuctionListResponse(
                 auctionCardAssembler.toCards(slice.getContent(), userId), page, size, slice.hasNext());
     }

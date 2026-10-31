@@ -386,8 +386,8 @@ class JwtAuthorizationWiringMySqlIT {
     }
 
     // #143: 마이페이지 3종이 실제 MySQL·dev SecurityFilterChain에서 로그인 필수이고, JWT 사용자 본인 데이터만
-    // 돌려주는지 본다(다른 사용자의 X-User-Id 헤더는 무시). findBySellerAndStatuses·findLikedAuctionIdsByUserId
-    // 쿼리가 MySQL에서 그대로 동작하는지도 함께 확인된다.
+    // 돌려주는지 본다(다른 사용자의 X-User-Id 헤더는 무시). findParticipatedByUserAndStatuses(EXISTS 서브쿼리)·
+    // findLikedAuctionIdsByUserId 쿼리가 MySQL에서 그대로 동작하는지도 함께 확인된다.
     @Test
     void MyPage_내_정보_나의_경매_관심_목록은_JWT_사용자_본인_데이터만_반환한다() {
         User seller = persistUser("mypage-seller");
@@ -395,6 +395,10 @@ class JwtAuthorizationWiringMySqlIT {
         Auction myLive = persistLiveAuction(persistProduct(seller));
         Auction myEnded = persistEndedAuctionWithBids(persistProduct(seller), otherSeller);
         Auction othersLive = persistLiveAuction(persistProduct(otherSeller));
+        // otherSeller가 seller의 진행 중 경매에 입찰한다(otherSeller는 myEnded에도 이미 입찰했다).
+        bidRepository.save(Bid.place(myLive, otherSeller, 15000L, BidType.MANUAL));
+        myLive.placeManualBid(otherSeller, 15000L);
+        myLive = auctionRepository.save(myLive);
         assertThat(status(postJson("/api/auctions/" + othersLive.getId() + "/likes", bearer(seller), "{}"))).isEqualTo(200);
         assertThat(status(postJson("/api/auctions/" + myEnded.getId() + "/likes", bearer(otherSeller), "{}"))).isEqualTo(200);
 
@@ -409,19 +413,26 @@ class JwtAuthorizationWiringMySqlIT {
         assertThat(me.path("data").path("userId").asLong()).isEqualTo(seller.getId());
         assertThat(me.path("data").path("nickname").asText()).isEqualTo("mypage-seller");
 
-        // 나의 경매: 내가 판매자인 경매만, current/past로 나뉜다.
-        JsonNode current = getJson("/api/me/auctions?state=current", bearerWithForeignXUserId(seller, otherSeller));
+        // 나의 경매 = 내가 참여(입찰·유효한 자동입찰)한 경매. 판매자라는 이유로는 나오지 않는다.
+        JsonNode sellerCurrent = getJson("/api/me/auctions?state=current", bearer(seller));
+        assertThat(status(sellerCurrent)).isEqualTo(200);
+        assertThat(sellerCurrent.path("data").path("items").size()).isZero();
+        assertThat(getJson("/api/me/auctions?state=past", bearer(seller)).path("data").path("items").size()).isZero();
+
+        // 참여자(otherSeller): seller의 X-User-Id를 붙여도 JWT 사용자 기준이다.
+        JsonNode current = getJson("/api/me/auctions?state=current", bearerWithForeignXUserId(otherSeller, seller));
         assertThat(status(current)).isEqualTo(200);
         assertThat(current.path("data").path("items").size()).isEqualTo(1);
         assertThat(current.path("data").path("items").get(0).path("auctionId").asLong()).isEqualTo(myLive.getId());
-        JsonNode past = getJson("/api/me/auctions?state=past", bearer(seller));
+        assertThat(current.path("data").path("hasNext").asBoolean()).isFalse();
+        JsonNode past = getJson("/api/me/auctions?state=past", bearer(otherSeller));
         assertThat(past.path("data").path("items").size()).isEqualTo(1);
         JsonNode endedCard = past.path("data").path("items").get(0);
         assertThat(endedCard.path("auctionId").asLong()).isEqualTo(myEnded.getId());
         assertThat(endedCard.path("status").asText()).isEqualTo("ENDED");
         assertThat(endedCard.path("currentPrice").asLong()).isEqualTo(15000L);
         assertThat(endedCard.path("likeCount").asInt()).isEqualTo(1);
-        assertThat(endedCard.path("isLiked").asBoolean()).isFalse();
+        assertThat(endedCard.path("isLiked").asBoolean()).isTrue();
         JsonNode badState = getJson("/api/me/auctions?state=all", bearer(seller));
         assertThat(status(badState)).isEqualTo(400);
         assertThat(badState.path("error").path("code").asInt()).isEqualTo(40001);

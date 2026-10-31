@@ -112,7 +112,7 @@ class MyPageControllerTest {
 
     @Test
     void 나의_경매는_state_기본값_current와_page_0_size_20으로_조회된다() throws Exception {
-        when(myAuctionQueryService.getMySellingAuctions(5L, "current", 0, 20)).thenReturn(oneCard());
+        when(myAuctionQueryService.getMyParticipatedAuctions(5L, "current", 0, 20)).thenReturn(oneCard());
 
         mockMvc.perform(get("/api/me/auctions").header("Authorization", bearer(5L)))
                 .andExpect(status().isOk())
@@ -123,12 +123,12 @@ class MyPageControllerTest {
                 .andExpect(jsonPath("$.data.size").value(20))
                 .andExpect(jsonPath("$.data.hasNext").value(false));
 
-        verify(myAuctionQueryService).getMySellingAuctions(5L, "current", 0, 20);
+        verify(myAuctionQueryService).getMyParticipatedAuctions(5L, "current", 0, 20);
     }
 
     @Test
     void 나의_경매는_요청한_state_page_size로_조회된다() throws Exception {
-        when(myAuctionQueryService.getMySellingAuctions(5L, "past", 1, 10))
+        when(myAuctionQueryService.getMyParticipatedAuctions(5L, "past", 1, 10))
                 .thenReturn(new AuctionListResponse(List.of(), 1, 10, false));
 
         mockMvc.perform(get("/api/me/auctions").param("state", "past").param("page", "1").param("size", "10")
@@ -136,12 +136,12 @@ class MyPageControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.items").isEmpty());
 
-        verify(myAuctionQueryService).getMySellingAuctions(5L, "past", 1, 10);
+        verify(myAuctionQueryService).getMyParticipatedAuctions(5L, "past", 1, 10);
     }
 
     @Test
     void 나의_경매_state가_잘못되면_400_40001이다() throws Exception {
-        when(myAuctionQueryService.getMySellingAuctions(5L, "all", 0, 20))
+        when(myAuctionQueryService.getMyParticipatedAuctions(5L, "all", 0, 20))
                 .thenThrow(new InvalidPageRequestException("state는 current 또는 past여야 합니다. 요청값: all"));
 
         mockMvc.perform(get("/api/me/auctions").param("state", "all").header("Authorization", bearer(5L)))
