@@ -113,6 +113,20 @@ public interface AuctionRepository extends JpaRepository<Auction, Long> {
             """)
     Slice<Auction> findListByStatuses(@Param("statuses") List<AuctionStatus> statuses, Pageable pageable);
 
+    // #143: 마이페이지 "나의 경매" - 이 사용자가 판매자인(product.seller) 경매. 상품이 아니라 경매 단위라
+    // 재경매로 생긴 경매도 각각 한 행이다. 정렬은 기본 목록과 같다(생성 시각 최신순, 같으면 id 내림차순).
+    @Query("""
+            select a from Auction a
+            join fetch a.product p
+            where p.seller.id = :sellerId and a.status in :statuses
+            order by a.createdAt desc, a.id desc
+            """)
+    Slice<Auction> findBySellerAndStatuses(
+            @Param("sellerId") Long sellerId,
+            @Param("statuses") List<AuctionStatus> statuses,
+            Pageable pageable
+    );
+
     // #142: 홈 추천 응답에 카드 정보를 채울 때, 추천 결과(캐시될 수 있음)의 경매를 product와 함께 다시 읽는다.
     @Query("""
             select a from Auction a

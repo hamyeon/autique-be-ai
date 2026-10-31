@@ -111,9 +111,11 @@ public interface AutoBidSettingRepository extends JpaRepository<AutoBidSetting, 
     // purchase_goal_matches에만 남고 여기 잡히지 않는다. (goal, auction) 쌍은 설계상 최대 1건이지만
     // (Day 5/6이 같은 goal로 같은 경매에 두 번 등록하지 않는다), 호출부가 auctionId로 다시 묶어
     // "경매별로 한 번"을 한 번 더 보장한다.
+    // #143: 참여 이력이 항상 같은 순서로 나오도록 참여(AutoBid 등록) 순서 - createdAt, id 오름차순 - 로 정렬한다.
     @Query("""
             select s.purchaseGoalId as goalId, s.auction.id as auctionId from AutoBidSetting s
             where s.purchaseGoalId in :goalIds
+            order by s.createdAt asc, s.id asc
             """)
     List<PurchaseGoalAuctionPair> findAuctionPairsByPurchaseGoalIdIn(@Param("goalIds") List<Long> goalIds);
 

@@ -50,13 +50,7 @@ public class AuctionListQueryService {
     // 기본 정렬은 경매 생성 시각(Auction.createdAt) 내림차순, 같으면 경매 ID 내림차순이다.
     @Transactional(readOnly = true)
     public AuctionListResponse getList(int page, int size, Long viewerUserId) {
-        if (page < 0) {
-            throw new InvalidPageRequestException("page는 0 이상이어야 합니다. 요청값: " + page);
-        }
-        if (size < 1 || size > MAX_PAGE_SIZE) {
-            throw new InvalidPageRequestException(
-                    "size는 1 이상 " + MAX_PAGE_SIZE + " 이하여야 합니다. 요청값: " + size);
-        }
+        validatePage(page, size);
         Slice<Auction> slice = auctionRepository.findListByStatuses(OPEN_STATUSES, PageRequest.of(page, size));
         return new AuctionListResponse(
                 auctionCardAssembler.toCards(slice.getContent(), viewerUserId),
@@ -64,5 +58,16 @@ public class AuctionListQueryService {
                 size,
                 slice.hasNext()
         );
+    }
+
+    // 경매 카드 목록 공통 page/size 규칙(#142 기본 목록, #143 마이페이지 목록). page >= 0, 1 <= size <= 50.
+    public static void validatePage(int page, int size) {
+        if (page < 0) {
+            throw new InvalidPageRequestException("page는 0 이상이어야 합니다. 요청값: " + page);
+        }
+        if (size < 1 || size > MAX_PAGE_SIZE) {
+            throw new InvalidPageRequestException(
+                    "size는 1 이상 " + MAX_PAGE_SIZE + " 이하여야 합니다. 요청값: " + size);
+        }
     }
 }

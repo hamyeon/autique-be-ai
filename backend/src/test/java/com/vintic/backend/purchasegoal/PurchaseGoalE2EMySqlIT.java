@@ -1,6 +1,7 @@
 package com.vintic.backend.purchasegoal;
 
 import com.vintic.backend.auction.domain.Auction;
+import com.vintic.backend.auction.domain.AuctionStatus;
 import com.vintic.backend.auction.repository.AuctionRepository;
 import com.vintic.backend.auction.service.AuctionEndService;
 import com.vintic.backend.autobid.repository.AutoBidSettingRepository;
@@ -214,11 +215,13 @@ class PurchaseGoalE2EMySqlIT {
         assertThat(detail.status()).isEqualTo("FULFILLED");
         assertThat(detail.participationCount()).isEqualTo(2);
         assertThat(detail.wonCount()).isEqualTo(1);
+        // #143: 참여(AutoBid 등록) 순서대로 나오고, auctionStatus로 LOST가 패배(ENDED)임을 구분할 수 있다.
         assertThat(detail.participations())
-                .extracting(PurchaseGoalParticipationResponse::auctionId, PurchaseGoalParticipationResponse::status)
-                .containsExactlyInAnyOrder(
-                        tuple(auctionA.getId(), "LOST"),
-                        tuple(auctionB.getId(), "WON")
+                .extracting(PurchaseGoalParticipationResponse::auctionId, PurchaseGoalParticipationResponse::status,
+                        PurchaseGoalParticipationResponse::auctionStatus)
+                .containsExactly(
+                        tuple(auctionA.getId(), "LOST", AuctionStatus.ENDED),
+                        tuple(auctionB.getId(), "WON", AuctionStatus.ENDED)
                 );
 
         ResponseEntity<ApiResponse<List<PurchaseGoalMatchHistoryResponse>>> matchResponse = restTemplate.exchange(

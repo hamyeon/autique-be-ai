@@ -2,6 +2,7 @@ package com.vintic.backend.purchasegoal.service;
 
 import com.vintic.backend.ai.purchase.dto.GoalCondition;
 import com.vintic.backend.auction.domain.Auction;
+import com.vintic.backend.auction.domain.AuctionStatus;
 import com.vintic.backend.autobid.domain.AutoBidSetting;
 import com.vintic.backend.common.exception.PurchaseGoalAccessDeniedException;
 import com.vintic.backend.order.domain.Order;
@@ -326,5 +327,62 @@ class PurchaseGoalQueryServiceTest {
 
         assertThatThrownBy(() -> purchaseGoalQueryService.getMatchHistory(goal.getId(), stranger.getId()))
                 .isInstanceOf(PurchaseGoalAccessDeniedException.class);
+    }
+
+    // ===== #143 참여 이력 보완 =====
+
+    @Test
+    void 참여_이력은_참여_등록_순서로_나온다() {
+        User seller = persistUser("seller-order@example.com");
+        User owner = persistUser("owner-order@example.com");
+        PurchaseGoal goal = persistGoal(owner);
+        // 경매 id 순서와 참여(AutoBid 등록) 순서를 일부러 다르게 만든다
+        Auction firstCreated = persistEndedAuction(persistProduct(seller));
+        Auction secondCreated = persistLiveAuction(persistProduct(seller));
+        persistAutoBidSetting(secondCreated, owner, goal.getId());
+        persistAutoBidSetting(firstCreated, owner, goal.getId());
+        entityManager.flush();
+        LocalDateTime base = LocalDateTime.now().minusDays(1).withNano(0);
+        entityManager.createNativeQuery("UPDATE auto_bid_settings SET created_at = :t WHERE auction_id = :a")
+                .setParameter("t", base).setParameter("a", secondCreated.getId()).executeUpdate();
+        entityManager.createNativeQuery("UPDATE auto_bid_settings SET created_at = :t WHERE auction_id = :a")
+                .setParameter("t", base.plusHours(1)).setParameter("a", firstCreated.getId()).executeUpdate();
+        entityManager.clear();
+
+        PurchaseGoalDetailResponse response = purchaseGoalQueryService.getGoal(goal.getId(), owner.getId());
+
+        assertThat(response.participations()).extracting(PurchaseGoalParticipationResponse::auctionId)
+                .containsExactly(secondCreated.getId(), firstCreated.getId());
+    }
+
+    @Test
+    void LOST는_auctionStatus로_패배와_경매_취소를_구분한다() {
+        User seller = persistUser("seller-lost@example.com");
+        User owner = persistUser("owner-lost@example.com");
+        PurchaseGoal goal = persistGoal(owner);
+        Auction lostByBid = persistEndedAuction(persistProduct(seller));
+        Auction canceled = persistScheduledAuction(persistProduct(seller));
+        canceled.cancel();
+        Auction won = persistEndedAuction(persistProduct(seller));
+        Auction live = persistLiveAuction(persistProduct(seller));
+        persistAutoBidSetting(lostByBid, owner, goal.getId());
+        persistAutoBidSetting(canceled, owner, goal.getId());
+        persistAutoBidSetting(won, owner, goal.getId());
+        persistAutoBidSetting(live, owner, goal.getId());
+        persistOrder(won, owner);
+        flushAndClear();
+
+        PurchaseGoalDetailResponse response = purchaseGoalQueryService.getGoal(goal.getId(), owner.getId());
+
+        assertThat(response.participations())
+                .extracting(PurchaseGoalParticipationResponse::auctionId,
+                        PurchaseGoalParticipationResponse::status,
+                        PurchaseGoalParticipationResponse::auctionStatus)
+                .containsExactlyInAnyOrder(
+                        tuple(lostByBid.getId(), "LOST", AuctionStatus.ENDED),
+                        tuple(canceled.getId(), "LOST", AuctionStatus.CANCELED),
+                        tuple(won.getId(), "WON", AuctionStatus.ENDED),
+                        tuple(live.getId(), "LIVE", AuctionStatus.LIVE)
+                );
     }
 }
