@@ -3,7 +3,9 @@ package com.vintic.backend.recommendation.service;
 import com.vintic.backend.ai.search.embedding.CosineSimilarity;
 import com.vintic.backend.auction.domain.Auction;
 import com.vintic.backend.auction.domain.AuctionStatus;
+import com.vintic.backend.auction.dto.AuctionCardResponse;
 import com.vintic.backend.auction.repository.AuctionRepository;
+import com.vintic.backend.auction.service.AuctionCardAssembler;
 import com.vintic.backend.product.domain.Product;
 import com.vintic.backend.recommendation.domain.ProductVector;
 import com.vintic.backend.recommendation.dto.RecommendationResponse;
@@ -20,6 +22,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
@@ -44,9 +47,14 @@ public class RecommendationService {
     private final ProductVectorRepository productVectorRepository;
     private final AuctionRepository auctionRepository;
     private final FallbackRecommendationProvider fallbackProvider;
+    private final AuctionCardAssembler auctionCardAssembler;
 
     @Transactional(readOnly = true)
     public RecommendationResponse recommend(Long userId, int limit) {
+        return withCards(select(userId, limit), userId);
+    }
+
+    private RecommendationResponse select(Long userId, int limit) {
         if (userId != null && activityLogRepository.countByUserId(userId) >= MIN_ACTIVITY_FOR_PERSONALIZATION) {
             Optional<float[]> userVector = userVectorService.buildUserVector(userId);
             if (userVector.isPresent()) {
@@ -59,6 +67,37 @@ public class RecommendationService {
             }
         }
         return fallback(limit);
+    }
+
+    // #142: 모든 추천 경로(개인화·Fallback)의 마지막 단계. 경매를 id로 다시 읽어
+    // (1) 지금 SCHEDULED/LIVE인 경매만 남기고 (2) 남은 항목에 카드 필드(조회 시점 값 + 요청자의 isLiked)를 채운다.
+    //
+    // (1)이 필요한 이유: Fallback 결과는 공유 캐시(최대 60초)에서 오므로, 캐시가 만들어진 뒤 종료·취소된
+    // 경매가 섞여 있을 수 있다. 개인화 경로도 같은 필터를 거친다. 다시 읽지 못한 경매는 상태를 확인할 수
+    // 없으므로 함께 뺀다. 빠진 자리를 다른 경매로 채우지 않는다 - 남은 개수만 반환한다.
+    // 남은 항목의 순서·personalized·reason·similarity는 그대로다. isLiked는 여기(캐시 밖)에서만 계산한다.
+    private RecommendationResponse withCards(RecommendationResponse response, Long userId) {
+        List<RecommendationResponse.RecommendedAuction> items = response.items();
+        if (items.isEmpty()) {
+            return response;
+        }
+        Map<Long, Auction> openAuctionsById = auctionRepository.findAllWithProductByIdIn(
+                        items.stream().map(RecommendationResponse.RecommendedAuction::auctionId).toList())
+                .stream()
+                .filter(auction -> OPEN_STATUSES.contains(auction.getStatus()))
+                .collect(Collectors.toMap(Auction::getId, auction -> auction));
+        List<Auction> ordered = items.stream()
+                .map(item -> openAuctionsById.get(item.auctionId()))
+                .filter(Objects::nonNull)
+                .toList();
+        Map<Long, AuctionCardResponse> cardsById = auctionCardAssembler.toCards(ordered, userId).stream()
+                .collect(Collectors.toMap(AuctionCardResponse::auctionId, card -> card));
+
+        List<RecommendationResponse.RecommendedAuction> openItems = items.stream()
+                .filter(item -> cardsById.containsKey(item.auctionId()))
+                .map(item -> item.withCard(cardsById.get(item.auctionId())))
+                .toList();
+        return new RecommendationResponse(response.personalized(), response.reason(), openItems);
     }
 
     private List<RecommendationResponse.RecommendedAuction> byTasteSimilarity(float[] userVector, int limit) {
@@ -133,7 +172,7 @@ public class RecommendationService {
 
     private RecommendationResponse.RecommendedAuction toItem(Auction auction, Double similarity) {
         Product product = auction.getProduct();
-        return new RecommendationResponse.RecommendedAuction(
+        return RecommendationResponse.RecommendedAuction.withoutCard(
                 auction.getId(),
                 product.getId(),
                 product.getBrand(),

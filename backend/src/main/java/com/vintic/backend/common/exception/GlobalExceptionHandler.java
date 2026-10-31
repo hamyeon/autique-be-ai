@@ -79,6 +79,13 @@ public class GlobalExceptionHandler {
                 .body(ApiResponse.fail(40002, e.getMessage()));
     }
 
+    // #142: 목록 조회 page/size/limit 범위 오류 (400 Bad Request). 요청값 검증 실패라 40001을 쓴다.
+    @ExceptionHandler(InvalidPageRequestException.class)
+    public ResponseEntity<ApiResponse<Void>> handleInvalidPageRequestException(InvalidPageRequestException e) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.fail(40001, e.getMessage()));
+    }
+
     // 구매 목표(PurchaseGoal) 예산/마감/조건 검증 실패 (400 Bad Request)
     @ExceptionHandler(InvalidPurchaseGoalException.class)
     public ResponseEntity<ApiResponse<Void>> handleInvalidPurchaseGoalException(InvalidPurchaseGoalException e) {
