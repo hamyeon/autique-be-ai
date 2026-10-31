@@ -323,6 +323,68 @@ class JwtAuthorizationWiringMySqlIT {
         assertThat(invalidTokenResponse.path("error").path("code").asInt()).isEqualTo(40101);
     }
 
+    // #142: 경매 목록 API(기본 목록·인기)가 실제 MySQL·dev SecurityFilterChain에서 비로그인으로 열리고,
+    // isLiked는 JWT 사용자 기준으로만 개인화되는지 본다. findPopular(group by + fetch join)와
+    // findListByStatuses(Slice) 쿼리가 MySQL에서 그대로 동작하는지도 함께 확인된다.
+    @Test
+    void AuctionList_기본_목록과_인기_경매가_비로그인으로_열리고_isLiked는_JWT_기준이다() {
+        User seller = persistUser("seller");
+        User liker = persistUser("liker");
+        User bidder1 = persistUser("bidder1");
+        User bidder2 = persistUser("bidder2");
+        Auction older = persistLiveAuction(persistProduct(seller));
+        Auction newer = persistLiveAuction(persistProduct(seller));
+        // 인기 1위가 되도록 newer에 입찰 4건을 넣는다(다른 테스트가 만든 경매와 섞여도 맨 앞에 오게).
+        long amount = 15000L;
+        for (User bidder : List.of(bidder1, bidder2, bidder1, bidder2)) {
+            bidRepository.save(Bid.place(newer, bidder, amount, BidType.MANUAL));
+            newer.placeManualBid(bidder, amount);
+            amount += 5000L;
+        }
+        newer = auctionRepository.save(newer);
+        assertThat(status(postJson("/api/auctions/" + newer.getId() + "/likes", bearer(liker), "{}"))).isEqualTo(200);
+
+        // 기본 목록: 비로그인 200, 가장 최근 생성된 두 경매가 생성 역순으로 맨 앞.
+        JsonNode anonymousList = getJson("/api/auctions?page=0&size=50", new HttpHeaders());
+        assertThat(status(anonymousList)).isEqualTo(200);
+        JsonNode items = anonymousList.path("data").path("items");
+        assertThat(items.get(0).path("auctionId").asLong()).isEqualTo(newer.getId());
+        assertThat(items.get(1).path("auctionId").asLong()).isEqualTo(older.getId());
+        assertThat(items.get(0).path("isLiked").asBoolean()).isFalse();
+        assertThat(items.get(0).path("likeCount").asInt()).isEqualTo(1);
+        assertThat(items.get(0).path("currentPrice").asLong()).isEqualTo(30000L);
+        assertThat(items.get(0).path("startPrice").asLong()).isEqualTo(10000L);
+        assertThat(items.get(0).path("status").asText()).isEqualTo("LIVE");
+        assertThat(items.get(0).path("grade").asText()).isEqualTo("B");
+        assertThat(items.get(0).path("name").asText()).isEqualTo("Nike Dunk Low Panda");
+        assertThat(anonymousList.path("data").path("page").asInt()).isZero();
+        assertThat(anonymousList.path("data").path("size").asInt()).isEqualTo(50);
+
+        // 로그인: 본인 관심만 true. 다른 사람 JWT + liker의 X-User-Id 헤더는 무시된다.
+        assertThat(getJson("/api/auctions?size=50", bearer(liker))
+                .path("data").path("items").get(0).path("isLiked").asBoolean()).isTrue();
+        assertThat(getJson("/api/auctions?size=50", bearerWithForeignXUserId(bidder1, liker))
+                .path("data").path("items").get(0).path("isLiked").asBoolean()).isFalse();
+
+        // 인기: 비로그인 200, 입찰 4건인 newer가 1위.
+        JsonNode anonymousPopular = getJson("/api/auctions/popular", new HttpHeaders());
+        assertThat(status(anonymousPopular)).isEqualTo(200);
+        JsonNode popular = anonymousPopular.path("data").path("items");
+        assertThat(popular.size()).isLessThanOrEqualTo(4);
+        assertThat(popular.get(0).path("auctionId").asLong()).isEqualTo(newer.getId());
+        assertThat(popular.get(0).path("isLiked").asBoolean()).isFalse();
+        assertThat(getJson("/api/auctions/popular", bearer(liker))
+                .path("data").path("items").get(0).path("isLiked").asBoolean()).isTrue();
+
+        // 잘못된 파라미터는 400/40001.
+        JsonNode badSize = getJson("/api/auctions?size=0", new HttpHeaders());
+        assertThat(status(badSize)).isEqualTo(400);
+        assertThat(badSize.path("error").path("code").asInt()).isEqualTo(40001);
+        JsonNode badPage = getJson("/api/auctions?page=abc", new HttpHeaders());
+        assertThat(status(badPage)).isEqualTo(400);
+        assertThat(badPage.path("error").path("code").asInt()).isEqualTo(40001);
+    }
+
     @Test
     void BidHistory_isMine과_myState가_JWT_기준으로_개인화된다() {
         User seller = persistUser("seller");

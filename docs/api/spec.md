@@ -90,14 +90,16 @@ Base URL : https://<api-공인IP-하이픈>.sslip.io
 | `GET /api/auctions/{id}` (경매 상세) | 조회 로그 기록, `myState` 채움 |
 | `GET /api/auctions/{id}/bids` (입찰 이력) | `isMine` 채움 |
 | `GET /api/auctions/{id}/similar` (비슷한 상품) | `isLiked` 채움 |
-| `GET /api/recommendations/auctions` (추천) | 개인화(`personalized: true`), 없으면 Fallback |
+| `GET /api/recommendations/auctions` (홈 "나에게 딱 맞는 상품") | 개인화(`personalized: true`) 조건이면 개인화, 아니면 Fallback. 카드 `isLiked` 채움 |
+| `GET /api/auctions/popular` (홈 "지금 인기 있는 경매", #142) | 카드 `isLiked` 채움 |
+| `GET /api/auctions` (상품 찾기 기본 경매 목록, #142) | 카드 `isLiked` 채움 |
 
 ### 인증 불필요 (비로그인)
 
 | API | 비고 |
 | --- | --- |
-| `GET /api/products` (상품 목록) | — |
-| `GET /api/curations` (큐레이션) | — |
+| `GET /api/products` (상품 목록) | 상품(Product) 단위 목록이다. 경매 카드 목록이 필요하면 `GET /api/auctions`를 쓴다 |
+| `GET /api/curations` (큐레이션) | **더미 데이터.** 서버에 하드코딩된 고정 응답이며 실제 상품·경매와 연결돼 있지 않다(#142 기준 홈 화면에 쓰지 않는다) |
 | `POST /api/auth/kakao` · `POST /api/auth/refresh` · `POST /api/auth/logout` (로그인·토큰) | permitAll(로그인 전/토큰 자체로 인증). 상세는 하단 "# 인증 — …" 절 |
 
 > dev/prod에서 위 "선택"·"불필요"는 **GET만** 비로그인 허용이다(같은 경로의 POST/PATCH/DELETE는 로그인
@@ -1368,6 +1370,8 @@ POST /api/products                   (아래 본문 — imageUrls 없음)
 | `GET /api/me/penalties` | 내 페널티 | auction-spec §14 |
 | `GET/POST /api/backup-offers/...` | 차순위 제안 조회/수락/거절 | auction-spec §15–17 |
 | `GET /api/auctions/{auctionId}/similar` | 비슷한 상품(#141: 경매 `status`·상품 `grade`·`startPrice`·`currentPrice` 추가) | auction-spec §18 |
+| `GET /api/auctions/popular` | 홈 "지금 인기 있는 경매"(#142, 비로그인 허용) | auction-spec §23 |
+| `GET /api/auctions` | 상품 찾기 화면 기본 경매 목록(#142, 비로그인 허용, page/size) | auction-spec §24 |
 | `POST/DELETE /api/auctions/{auctionId}/likes` | 관심 등록/해제 | auction-spec §19–20 |
 | `POST /{id}/cancel`, `PATCH /{id}/start-price`, `POST /{id}/relist` | 경매 취소·시작가 수정·재경매(판매자용, freeze 이후 추가) | auction-spec §경매 관리 API |
 
@@ -1381,7 +1385,12 @@ POST /api/products                   (아래 본문 — imageUrls 없음)
 
 `GET /api/recommendations/auctions`
 
-사용자의 행동 로그(조회·찜·입찰)를 기반으로 취향에 맞는 진행 중 경매를 추천하는 API입니다.
+사용자의 행동 로그(조회·찜·입찰)를 기반으로 취향에 맞는 진행 중 경매를 추천하는 API입니다. 홈 화면
+**"나에게 딱 맞는 상품"** 영역은 이 API를 `limit=4`로 호출합니다(#142).
+
+**인증: 선택.** 비로그인도 호출할 수 있고 그때는 항상 Fallback입니다. 로그인 사용자는 다른 API와 같은 방식으로
+식별합니다 — dev/prod는 `Authorization: Bearer {accessToken}`, local은 mock `X-User-Id`(상단 "인증" 절).
+dev/prod에서 `X-User-Id` 헤더를 보내도 무시됩니다.
 
 ### `GET /api/auctions/{auctionId}/similar`와의 차이
 
@@ -1389,7 +1398,7 @@ POST /api/products                   (아래 본문 — imageUrls 없음)
 
 | | `/recommendations/auctions` | `/auctions/{id}/similar` |
 | --- | --- | --- |
-| 기준 | **사용자** (X-User-Id) | **경매 하나** (auctionId) |
+| 기준 | **로그인 사용자**(인증 정보) | **경매 하나** (auctionId) |
 | 방식 | 행동 로그 → 취향 벡터 → 코사인 유사도 | 같은 브랜드 |
 | 정렬 | 유사도 높은 순 | 마감 임박 순 |
 | 쓰는 화면 | 홈 "회원님을 위한 추천" | 상세 페이지 "비슷한 상품" |
@@ -1401,10 +1410,19 @@ POST /api/products                   (아래 본문 — imageUrls 없음)
 
 | `personalized` | 동작 | 조건 |
 | --- | --- | --- |
-| `true` | **개인화 추천.** 최근 행동 로그로 취향 벡터를 만들고, 각 경매 상품 벡터와의 코사인 유사도 순으로 정렬합니다. | `X-User-Id`가 있고, 해당 유저의 행동 로그가 **3건 이상**이며, 그 행동에 해당하는 상품 벡터가 존재할 때 |
-| `false` | **Cold Start Fallback.** 마감 임박 경매와 인기(입찰 많은) 경매를 번갈아 섞어 내려줍니다. | 위 조건을 만족하지 못하는 모든 경우 (비로그인, 신규 가입자, 벡터 미생성 등) |
+| `true` | **개인화 추천.** 최근 행동 로그로 취향 벡터를 만들고, 각 경매 상품 벡터와의 코사인 유사도 순으로 정렬합니다. 벡터가 없는 경매는 유사도 순 뒤에 마감 임박 순으로 붙습니다. | 로그인 상태이고, 행동 로그가 **3건 이상**이며, 취향 벡터를 만들 수 있고, 유사도를 매긴 경매가 1건 이상일 때 |
+| `false` | **Cold Start Fallback.** 진행 중(`LIVE`, 종료 시각 전) 경매의 마감 임박 순과 인기 순(§23과 같은 입찰 수 기준, `SCHEDULED`/`LIVE`)을 번갈아 섞고 중복을 뺀 뒤 `limit`개까지 내려줍니다. 비로그인·신규 사용자가 같은 결과를 공유하므로 서버가 이 **선정 결과**를 최대 60초 캐시합니다(입찰·경매 종료 시 캐시를 비움. 경매 취소는 캐시를 비우지 않음). 캐시된 결과도 응답 직전에 아래 "최종 상태 필터"를 거칩니다 | 위 조건을 만족하지 못하는 모든 경우 (비로그인, 신규 가입자, 벡터 미생성 등) |
 
 Fallback도 정상 응답(`200 OK`)입니다. 추천할 데이터가 없다는 이유로 에러를 반환하지 않습니다.
+
+**최종 상태 필터(#142).** 개인화·Fallback 어느 경로든 응답 직전에 추천된 경매를 다시 조회해, **지금 상태가
+`SCHEDULED`·`LIVE`인 경매만** 응답에 남깁니다. 캐시가 만들어진 뒤 종료(`ENDED`)·취소(`CANCELED`)된 경매는
+응답에서 빠집니다(FE가 `status`로 걸러낼 필요 없음). 남은 항목의 순서·`personalized`·`reason`·`similarity`는
+그대로입니다.
+
+**대상이 부족할 때.** 참여할 수 있는 경매가 `limit`보다 적거나 최종 상태 필터로 일부가 빠지면 **남은 개수만**
+반환합니다(다른 경매·더미·중복으로 채우지 않음 — 예: `limit=4`인데 3개). 모두 빠지거나 대상이 없으면
+`items: []`(200)입니다.
 
 ## 취향 벡터 계산 방식
 
@@ -1425,17 +1443,17 @@ Fallback도 정상 응답(`200 OK`)입니다. 추천할 데이터가 없다는 �
 
 | 헤더 | 필수 | 설명 |
 | --- | --- | --- |
-| `X-User-Id` | ❌ | 추천 대상 사용자 ID. **없으면 Fallback 결과를 반환합니다.** |
+| `Authorization` | ❌ | `Bearer {accessToken}`(dev/prod). 없으면 비로그인으로 처리돼 Fallback 결과를 반환합니다. local 환경은 mock `X-User-Id` |
 
 ### Query Parameter
 
 | 파라미터 | 타입 | 필수 | 기본값 | 설명 |
 | --- | --- | --- | --- | --- |
-| `limit` | `int` | ❌ | `10` | 추천 개수. 최대 `50`까지이며, 초과 입력 시 50으로 잘립니다. |
+| `limit` | `int` | ❌ | `10` | 추천 개수. 최대 `50`까지이며, 초과 입력 시 50으로 잘립니다. `0` 이하면 기본값 `10`을 씁니다(오류 아님). 홈 카드 4개는 `limit=4` |
 
 ```
-GET /api/recommendations/auctions?limit=10
-X-User-Id: 3
+GET /api/recommendations/auctions?limit=4
+Authorization: Bearer {accessToken}
 ```
 
 ## Response ✔️
@@ -1449,7 +1467,7 @@ X-User-Id: 3
   "success": true,
   "data": {
     "personalized": true,
-    "reason": "최근 관심 상품과 비슷한 경매를 추천합니다.",
+    "reason": "최근 보신 상품과 비슷한 경매를 골랐습니다.",
     "items": [
       {
         "auctionId": 1,
@@ -1459,8 +1477,15 @@ X-User-Id: 3
         "colorway": "Panda",
         "sizeKr": 270,
         "currentPrice": 100000,
-        "endAt": "2026-08-21T15:30:00",
-        "similarity": 0.9774
+        "endAt": "2026-08-21T15:30",
+        "similarity": 0.9774,
+        "name": "Nike Dunk Low Panda",
+        "thumbnailUrl": "https://{bucket}.s3.ap-northeast-2.amazonaws.com/{key}?X-Amz-...",
+        "status": "LIVE",
+        "grade": "B",
+        "startPrice": 80000,
+        "likeCount": 3,
+        "isLiked": true
       }
     ]
   },
@@ -1487,8 +1512,15 @@ X-User-Id: 3
         "colorway": "Panda",
         "sizeKr": 270,
         "currentPrice": 100000,
-        "endAt": "2026-08-21T15:30:00",
-        "similarity": null
+        "endAt": "2026-08-21T15:30",
+        "similarity": null,
+        "name": "Nike Dunk Low Panda",
+        "thumbnailUrl": "https://{bucket}.s3.ap-northeast-2.amazonaws.com/{key}?X-Amz-...",
+        "status": "LIVE",
+        "grade": "B",
+        "startPrice": 80000,
+        "likeCount": 3,
+        "isLiked": false
       }
     ]
   },
@@ -1508,16 +1540,27 @@ X-User-Id: 3
 | `items[].model` | `string` | 모델명 |
 | `items[].colorway` | `string` | 컬러웨이 |
 | `items[].sizeKr` | `number` | 사이즈(mm) |
-| `items[].currentPrice` | `number` | 현재 입찰가 |
-| `items[].endAt` | `string` | 경매 종료 시각 |
+| `items[].currentPrice` | `number` | 현재가(화면의 "최고가"). 자동입찰 상한가가 아니다. #142부터 응답 시점의 값 |
+| `items[].endAt` | `string` | 경매 종료 시각. **다른 API와 형식이 다르다** — 오프셋 없는 서울 시각 `LocalDateTime.toString()` 문자열이다. 끝자리가 0인 단위는 생략된다 — 예: `2026-08-21T15:30`(초 0), `2026-08-21T15:30:05`, `2026-08-21T15:30:05.123`(소수 초 있음). ISO-8601 파서로 읽되 길이를 가정하지 말 것. 기존 호환을 위해 형식을 바꾸지 않았다(다른 API의 `+09:00` 오프셋 형식과 다름) |
 | `items[].similarity` | `number \| null` | 취향 벡터와의 코사인 유사도(0~1). **Fallback이거나, 개인화 목록 뒤쪽에 붙는 순위 없는 항목이면 `null`입니다.** |
+| `items[].name` | `string` | 상품 표시명(#142). 경매 상세 `product.name`과 같은 규칙(`brand + model + colorway`) |
+| `items[].thumbnailUrl` | `string \| null` | 대표 이미지(상품 첫 이미지)의 24시간 서명 URL(#142). 응답마다 새로 서명되므로 저장해 두고 재사용하지 말 것. 이미지가 없으면 `null` |
+| `items[].status` | `string` | 경매 상태(#142). 최종 상태 필터를 거치므로 항상 `SCHEDULED` 또는 `LIVE`다 |
+| `items[].grade` | `string \| null` | 상품 등급, 저장된 `conditionGrade` 그대로(#142) |
+| `items[].startPrice` | `number` | 경매 시작가(#142) |
+| `items[].likeCount` | `number` | 관심 수(#142) |
+| `items[].isLiked` | `boolean` | 로그인 사용자 본인의 관심 여부(#142). 비로그인이면 항상 `false` |
+
+> #142 카드 필드(`name`~`isLiked`)와 `currentPrice`는 최종 상태 필터와 같은 단계에서, 다시 읽은 경매의 조회 시점
+> 값으로 채웁니다. `isLiked`는 공유 캐시에 저장되지 않고 요청마다 로그인 사용자 기준으로 계산됩니다. 다시
+> 읽지 못한 경매(정상 흐름에서는 없음)는 상태를 확인할 수 없으므로 응답에서 뺍니다.
 
 ### 프론트 적용 시 유의사항
 
 - `personalized` 값에 따라 섹션 문구를 다르게 노출해 주세요. `true`면 "회원님을 위한 추천", `false`면 "지금 인기 있는 경매"처럼 표현하는 것을 권장합니다.
 - `similarity`는 `null`일 수 있으므로 화면에 표시한다면 항상 null 체크가 필요합니다. `personalized: true`여도 목록 **뒤쪽에는 `similarity: null`인 항목이 붙을 수 있습니다** — 벡터가 아직 만들어지지 않아 순위를 매길 수 없는 경매를 버리는 대신, 유사도 순 뒤에 마감 임박 순으로 이어 붙입니다.
 - 추천 대상은 **진행 중(`SCHEDULED`, `LIVE`) 경매**뿐입니다. 종료된 경매는 포함되지 않습니다.
-- 행동 로그는 아래 API 호출 시 `X-User-Id` 헤더가 있으면 **자동으로 기록**됩니다. 프론트에서 별도 로그 전송 API를 호출할 필요는 없습니다.
+- 행동 로그는 아래 API를 **로그인 상태로** 호출하면 **자동으로 기록**됩니다. 프론트에서 별도 로그 전송 API를 호출할 필요는 없습니다.
   - `GET /api/auctions/{auctionId}` → `VIEW`
   - `POST /api/auctions/{auctionId}/likes` → `LIKE` / `DELETE`는 기록 삭제
   - `POST /api/auctions/{auctionId}/bids` → `BID`

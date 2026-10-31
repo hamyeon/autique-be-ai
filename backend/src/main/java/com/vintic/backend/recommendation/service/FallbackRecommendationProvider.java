@@ -78,7 +78,7 @@ public class FallbackRecommendationProvider {
 
     private RecommendationResponse.RecommendedAuction toItem(Auction auction) {
         Product product = auction.getProduct();
-        return new RecommendationResponse.RecommendedAuction(
+        return RecommendationResponse.RecommendedAuction.withoutCard(
                 auction.getId(),
                 product.getId(),
                 product.getBrand(),

@@ -4,6 +4,7 @@ import com.vintic.backend.auction.domain.Auction;
 import com.vintic.backend.auction.domain.AuctionStatus;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Slice;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
@@ -89,15 +90,36 @@ public interface AuctionRepository extends JpaRepository<Auction, Long> {
 
     // Cold Start Fallback - 인기순. 입찰이 많이 붙은 경매를 검증된 상품으로 본다.
     // 입찰이 하나도 없는 경매도 후보에 들어와야 하므로 left join을 쓴다.
+    // #142: 홈 "지금 인기 있는 경매"(GET /api/auctions/popular)도 이 쿼리를 쓴다. 입찰 수·종료 시각이
+    // 같으면 순서가 정해지지 않았으므로 마지막에 a.id asc를 붙여 항상 같은 순서가 나오게 했다.
     @Query("""
             select a from Auction a
             join fetch a.product
             left join Bid b on b.auction = a
             where a.status in :statuses
             group by a
-            order by count(b) desc, a.endAt asc
+            order by count(b) desc, a.endAt asc, a.id asc
             """)
     List<Auction> findPopular(@Param("statuses") List<AuctionStatus> statuses, Pageable pageable);
+
+    // #142: 상품 찾기 화면 기본 경매 목록(GET /api/auctions). 경매 생성 시각 최신순, 같으면 id 내림차순.
+    // Slice라 count 쿼리 없이 size+1건을 읽어 hasNext만 판단한다. product는 to-one이라 fetch join과
+    // 페이징을 함께 써도 된다.
+    @Query("""
+            select a from Auction a
+            join fetch a.product
+            where a.status in :statuses
+            order by a.createdAt desc, a.id desc
+            """)
+    Slice<Auction> findListByStatuses(@Param("statuses") List<AuctionStatus> statuses, Pageable pageable);
+
+    // #142: 홈 추천 응답에 카드 정보를 채울 때, 추천 결과(캐시될 수 있음)의 경매를 product와 함께 다시 읽는다.
+    @Query("""
+            select a from Auction a
+            join fetch a.product
+            where a.id in :auctionIds
+            """)
+    List<Auction> findAllWithProductByIdIn(@Param("auctionIds") List<Long> auctionIds);
 
     // #73-3: AuctionStartScheduler가 이번 회차에 처리할 후보를 고르는 non-locking 조회다. id만
     // 스칼라로 뽑는다 - status/startAt 같은 business decision은 여기서 내리지 않고,

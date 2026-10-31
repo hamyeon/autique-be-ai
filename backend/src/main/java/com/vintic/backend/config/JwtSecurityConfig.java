@@ -23,6 +23,8 @@ import java.util.List;
 //
 // endpoint 정책은 #75-0에서 확정한 anonymous/required matrix를 그대로 옮긴 것이다 - 임의로
 // 넓히거나 좁히지 않는다. anonymous 허용:
+//   GET  /api/auctions                 (#142 기본 경매 목록)
+//   GET  /api/auctions/popular         (#142 홈 인기 경매)
 //   GET  /api/auctions/{auctionId}
 //   GET  /api/auctions/{auctionId}/bids
 //   GET  /api/auctions/{auctionId}/similar
@@ -61,7 +63,11 @@ import java.util.List;
 @Profile({"dev", "prod"})
 public class JwtSecurityConfig {
 
+    // #142: GET /api/auctions(기본 목록)와 /api/auctions/popular(홈 인기 경매)를 추가했다.
+    // popular는 "/api/auctions/{auctionId}" 패턴에도 걸리지만 의도를 드러내기 위해 따로 적는다.
     private static final String[] ANONYMOUS_GET_PATHS = {
+            "/api/auctions",
+            "/api/auctions/popular",
             "/api/auctions/{auctionId}",
             "/api/auctions/{auctionId}/bids",
             "/api/auctions/{auctionId}/similar",

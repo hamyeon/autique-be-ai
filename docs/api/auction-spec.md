@@ -3428,6 +3428,17 @@ POST /api/auctions/{previousAuctionId}/relist
 
 # 21. 화면 ↔︎ API 대응
 
+## 홈 · 상품 찾기 (#142)
+
+| 화면 | 진입 API | 주요 사용 필드 |
+| --- | --- | --- |
+| 홈 "나에게 딱 맞는 상품" | `GET /api/recommendations/auctions?limit=4` (spec.md 추천 API) | `personalized`(문구 분기), `items[].auctionId`·`thumbnailUrl`·`brand`·`name`·`status`·`grade`·`startPrice`·`currentPrice`·`likeCount`·`isLiked` |
+| 홈 "지금 인기 있는 경매" | `GET /api/auctions/popular` (§23, 기본 4개) | `items[]` 카드 필드 |
+| 상품 찾기 기본 목록 | `GET /api/auctions?page=&size=` (§24) | `items[]` 카드 필드, `hasNext` |
+
+관심 등록·해제는 기존 `POST·DELETE /api/auctions/{auctionId}/likes`(§19–20)를 그대로 쓴다. `GET /api/curations`는
+더미 데이터라 홈 화면에 쓰지 않는다.
+
 ## phase01 · 경매 시작 전
 
 | 화면 | 진입 API | 액션 API | 주요 사용 필드 |
@@ -3504,6 +3515,215 @@ POST /api/auctions/{previousAuctionId}/relist
 /result.noShowCount              — 미채택 (/api/me/penalties로 일원화)
 /result.bidRestrictedUntil       — 미채택 (동일)
 Product.SOLD 상태                — 불필요
+```
+
+---
+
+# 23. 홈 인기 경매 O
+
+```
+GET /api/auctions/popular
+```
+
+## API 상세 설명
+
+홈 화면 **"지금 인기 있는 경매"** 카드 목록(#142). 기본 4개.
+
+- **인증: 선택.** 비로그인도 조회할 수 있다(`isLiked`는 모두 `false`). 로그인 사용자는 인증 정보
+  (dev/prod `Authorization: Bearer`, local mock `X-User-Id`)로만 식별한다 — dev/prod에서 `X-User-Id` 헤더는 무시된다.
+  유효하지 않은 토큰을 보내면 비로그인 허용 API여도 `401`(`40101`)이다.
+- **조회 대상:** 경매 상태 `SCHEDULED`(예정)·`LIVE`(진행 중)만. `ENDED`·`CANCELED`는 제외한다.
+- **인기 기준(정렬):** ① 그 경매에 저장된 입찰(`bids` 행) 수 내림차순 → ② 종료 시각(`endAt`) 오름차순 →
+  ③ 경매 ID 오름차순. 입찰 수는 직접 입찰과 자동입찰 엔진이 넣은 입찰을 모두 센다. **관심 수(`likeCount`)는 기준이 아니다.**
+  예정 경매는 입찰이 0건이라 입찰이 있는 진행 중 경매보다 뒤에 온다. 같은 기준을 추천 API의 Fallback이 "인기" 쪽에 쓴다.
+- 대상 경매가 `limit`보다 적으면 **있는 만큼만** 반환한다(더미·중복으로 채우지 않음). 대상이 없으면 `items: []`.
+- 종료 시각이 지났지만 종료 스케줄러가 아직 `ENDED`로 바꾸지 않은 짧은 구간의 경매는 `LIVE`로 포함될 수 있다.
+
+## Request ✔️
+
+### Query Parameter
+
+| 이름 | Type | Description | Required |
+| --- | --- | --- | --- |
+| limit | Int | 가져올 개수. 기본 `4`, 허용 `1`~`20` | X |
+
+```
+GET /api/auctions/popular
+GET /api/auctions/popular?limit=4
+Authorization: Bearer {accessToken}   (선택)
+```
+
+## Response ✔️
+
+### Success ✅
+
+#### Response Body
+
+| 이름 | Type | Description | Required |
+| --- | --- | --- | --- |
+| success | Boolean | true | O |
+| error | Object | null | O |
+| data | Object | API 관련 데이터 | O |
+| — items | Array<Object> | 경매 카드 목록(인기순). 비어 있을 수 있다 | O |
+| —— auctionId | Long | 경매 ID — 카드는 경매 단위로 식별한다 | O |
+| —— productId | Long | 상품 ID | O |
+| —— brand | String | 브랜드 | X |
+| —— name | String | 상품 표시명. §1 "상품 표시명 규칙"(`brand + modelName + color`)과 같다 | O |
+| —— thumbnailUrl | String | 대표 이미지(상품 첫 이미지)의 **24시간 서명 URL**. 응답마다 새로 서명되므로 저장하지 말고 그때그때 표시만 한다. 이미지가 없으면 `null` | X |
+| —— status | String | 경매 상태 `SCHEDULED` / `LIVE` | O |
+| —— grade | String | 상품 등급. 저장된 `conditionGrade` 그대로(변환 없음, `DS`/`S`/`UNKNOWN` 등도 올 수 있음) | X |
+| —— startPrice | Long | 경매 시작가 | O |
+| —— currentPrice | Long | 현재가 — 화면의 **"최고가"**. 입찰 전에는 `startPrice`와 같다. 자동입찰 상한가가 아니다 | O |
+| —— likeCount | Int | 관심 수 | O |
+| —— isLiked | Boolean | 로그인 사용자 본인의 관심 여부. 비로그인이면 `false` | O |
+
+#### 200 Ok
+
+```json
+{
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "auctionId": 30,
+        "productId": 20,
+        "brand": "Nike",
+        "name": "Nike Dunk Low Panda",
+        "thumbnailUrl": "https://{bucket}.s3.ap-northeast-2.amazonaws.com/{key}?X-Amz-...",
+        "status": "LIVE",
+        "grade": "B",
+        "startPrice": 100000,
+        "currentPrice": 125000,
+        "likeCount": 3,
+        "isLiked": false
+      }
+    ]
+  },
+  "error": null
+}
+```
+
+#### 200 Ok — 대상 없음
+
+```json
+{ "success": true, "data": { "items": [] }, "error": null }
+```
+
+### Failure ❌
+
+| HTTP | code | 발생 조건 |
+| --- | --- | --- |
+| 400 | 40001 | `limit`이 1~20 범위 밖이거나 숫자가 아님 |
+| 401 | 40101 | 유효하지 않은 토큰을 보냄 |
+
+```json
+{
+  "success": false,
+  "data": null,
+  "error": { "code": 40001, "message": "limit은 1 이상 20 이하여야 합니다. 요청값: 0" }
+}
+```
+
+---
+
+# 24. 기본 경매 목록 O
+
+```
+GET /api/auctions
+```
+
+## API 상세 설명
+
+상품 찾기 화면의 **기본 경매 목록**(#142). 경매 단위 카드를 페이지로 조회한다. 인기순·최신순 탭 전환과
+검색·필터는 제공하지 않는다(기본 목록·기본 정렬만).
+
+- **인증: 선택.** §23과 같다(비로그인 `isLiked = false`, 로그인 사용자는 인증 정보로만 식별).
+- **조회 대상:** `SCHEDULED`·`LIVE` 경매만. `ENDED`·`CANCELED` 제외.
+- **정렬:** 경매 생성 시각(`auctions.created_at` — 경매 행이 만들어진 시각. 상품 등록 시의 첫 경매와 재경매
+  모두 각자 생성 시각을 가진다) 내림차순 → 같으면 경매 ID 내림차순.
+- **페이지네이션:** 입찰 내역(§3)과 같은 `page`/`size` + 응답 `page`/`size`/`hasNext` 형식. 전체 개수는 주지 않는다.
+  마지막 페이지를 넘긴 `page`는 오류가 아니라 빈 목록(`hasNext: false`)이다.
+- 목록을 넘기는 사이 새 경매가 등록되면 다음 페이지에 앞 페이지 항목이 다시 보일 수 있다(offset 방식).
+- 기존 `GET /api/products`(상품 단위 목록)는 그대로이며 이 API와 별개다.
+
+## Request ✔️
+
+### Query Parameter
+
+| 이름 | Type | Description | Required |
+| --- | --- | --- | --- |
+| page | Int | 페이지 번호(0부터). 기본 `0`, `0` 이상 | X |
+| size | Int | 페이지 크기. 기본 `20`, 허용 `1`~`50` | X |
+
+```
+GET /api/auctions?page=0&size=20
+Authorization: Bearer {accessToken}   (선택)
+```
+
+## Response ✔️
+
+### Success ✅
+
+#### Response Body
+
+| 이름 | Type | Description | Required |
+| --- | --- | --- | --- |
+| success | Boolean | true | O |
+| error | Object | null | O |
+| data | Object | API 관련 데이터 | O |
+| — items | Array<Object> | 경매 카드 목록. 카드 필드는 §23과 같다 | O |
+| — page | Int | 요청한 페이지 번호 | O |
+| — size | Int | 요청한 페이지 크기 | O |
+| — hasNext | Boolean | 다음 페이지 존재 여부 | O |
+
+#### 200 Ok
+
+```json
+{
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "auctionId": 31,
+        "productId": 21,
+        "brand": "ASICS",
+        "name": "ASICS Novablast 6 Black",
+        "thumbnailUrl": "https://{bucket}.s3.ap-northeast-2.amazonaws.com/{key}?X-Amz-...",
+        "status": "SCHEDULED",
+        "grade": "A",
+        "startPrice": 50000,
+        "currentPrice": 50000,
+        "likeCount": 0,
+        "isLiked": false
+      }
+    ],
+    "page": 0,
+    "size": 20,
+    "hasNext": false
+  },
+  "error": null
+}
+```
+
+#### 200 Ok — 빈 목록
+
+```json
+{ "success": true, "data": { "items": [], "page": 0, "size": 20, "hasNext": false }, "error": null }
+```
+
+### Failure ❌
+
+| HTTP | code | 발생 조건 |
+| --- | --- | --- |
+| 400 | 40001 | `page` < 0, `size`가 1~50 범위 밖, 또는 `page`/`size`가 숫자가 아님 |
+| 401 | 40101 | 유효하지 않은 토큰을 보냄 |
+
+```json
+{
+  "success": false,
+  "data": null,
+  "error": { "code": 40001, "message": "size는 1 이상 50 이하여야 합니다. 요청값: 51" }
+}
 ```
 
 ---
