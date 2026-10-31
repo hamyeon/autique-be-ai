@@ -51,11 +51,18 @@ public class Product {
     @Column(length = 1000)
     private String description;
 
+    // #141: 상품 상태 설명. description(판매자 설명, 요청의 sellerDescription)과는 별개 값이다.
+    // 등록 시 판매자가 수정한 값, 생략하면 분석 세션의 Vision conditionDescription이 들어간다.
+    // 이 컬럼이 생기기 전에 등록된 상품은 null이다(조회 응답도 null).
+    @Column(name = "condition_description", length = 1000)
+    private String conditionDescription;
+
     private LocalDateTime createdAt;
 
     protected Product() {
     }
 
+    // 상태 설명 없이 만드는 기존 생성자. 기존 호출부(테스트·시더)를 그대로 두기 위해 남긴다.
     public Product(
             User seller,
             List<String> imageUrls,
@@ -72,6 +79,27 @@ public class Product {
             String reason,
             String description
     ) {
+        this(seller, imageUrls, brand, model, colorway, sizeKr, conditionGrade, componentStatus,
+                recommendedPrice, baseMarketPrice, priceRange, finalPrice, reason, description, null);
+    }
+
+    public Product(
+            User seller,
+            List<String> imageUrls,
+            String brand,
+            String model,
+            String colorway,
+            Integer sizeKr,
+            String conditionGrade,
+            String componentStatus,
+            Integer recommendedPrice,
+            Integer baseMarketPrice,
+            String priceRange,
+            Integer finalPrice,
+            String reason,
+            String description,
+            String conditionDescription
+    ) {
         this.seller = seller;
         this.imageUrls = new ArrayList<>(imageUrls);
         this.brand = brand;
@@ -86,6 +114,7 @@ public class Product {
         this.finalPrice = finalPrice;
         this.reason = reason;
         this.description = description;
+        this.conditionDescription = conditionDescription;
         this.createdAt = LocalDateTime.now();
     }
 
@@ -147,6 +176,10 @@ public class Product {
 
     public String getDescription() {
         return description;
+    }
+
+    public String getConditionDescription() {
+        return conditionDescription;
     }
 
     public LocalDateTime getCreatedAt() {

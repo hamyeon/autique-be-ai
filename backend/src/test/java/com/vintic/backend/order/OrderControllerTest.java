@@ -5,6 +5,7 @@ import com.vintic.backend.common.exception.OrderCanceledException;
 import com.vintic.backend.common.exception.OrderNotFoundException;
 import com.vintic.backend.common.exception.PaymentExpiredException;
 import com.vintic.backend.order.domain.OrderStatus;
+import com.vintic.backend.order.domain.OrderType;
 import com.vintic.backend.order.dto.OrderPayResponse;
 import com.vintic.backend.order.dto.OrderResponse;
 import com.vintic.backend.order.service.OrderCommandService;
@@ -43,7 +44,7 @@ class OrderControllerTest {
                 50L, 1L, OrderStatus.PAYMENT_PENDING,
                 new OrderResponse.Product(10L, "아식스 노바블라스트 6 블랙", "Novablast 6", "https://example.com/a.jpg"),
                 105000L, 3000L, 108000L,
-                now.plusHours(2), now, null
+                now.plusHours(2), now, null, OrderType.BACKUP_ACCEPT
         );
         when(orderQueryService.getOrder(50L, 2L)).thenReturn(response);
 
@@ -57,7 +58,8 @@ class OrderControllerTest {
                 .andExpect(jsonPath("$.data.purchasePrice").value(105000))
                 .andExpect(jsonPath("$.data.shippingFee").value(3000))
                 .andExpect(jsonPath("$.data.totalAmount").value(108000))
-                .andExpect(jsonPath("$.data.paidAt").doesNotExist());
+                .andExpect(jsonPath("$.data.paidAt").doesNotExist())
+                .andExpect(jsonPath("$.data.orderType").value("BACKUP_ACCEPT"));
     }
 
     @Test

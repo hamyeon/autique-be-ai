@@ -106,4 +106,21 @@ class OrderTest {
 
         assertThatThrownBy(order::expire).isInstanceOf(InvalidOrderStatusException.class);
     }
+
+    // ===== #141 orderType =====
+
+    @Test
+    void 낙찰자_주문은_orderType이_WINNER다() {
+        Order order = Order.createForWinner(auction, buyer, 30000L, 3000L, LocalDateTime.now().plusHours(24));
+
+        assertThat(order.getOrderType()).isEqualTo(OrderType.WINNER);
+    }
+
+    @Test
+    void 차순위_수락_주문은_orderType이_BACKUP_ACCEPT다() {
+        Order order = Order.createForBackupAccept(auction, buyer, 25000L, 3000L, LocalDateTime.now().plusHours(24));
+
+        assertThat(order.getOrderType()).isEqualTo(OrderType.BACKUP_ACCEPT);
+        assertThat(order.getStatus()).isEqualTo(OrderStatus.PAYMENT_PENDING);
+    }
 }

@@ -11,6 +11,7 @@ import com.vintic.backend.autobid.domain.AutoBidSetting;
 import com.vintic.backend.autobid.domain.AutoBidSettingStatus;
 import com.vintic.backend.autobid.dto.AutoBidRecommendationResponse;
 import com.vintic.backend.autobid.repository.AutoBidSettingRepository;
+import com.vintic.backend.bid.domain.Bid;
 import com.vintic.backend.bid.repository.BidRepository;
 import com.vintic.backend.common.exception.AuctionNotFoundException;
 import com.vintic.backend.common.exception.UserNotFoundException;
@@ -130,7 +131,8 @@ public class AuctionQueryService {
                         product.getConditionGrade(),
                         product.getImageUrls().stream()
                                 .map(url -> s3UrlPresigner.presign(url, IMAGE_URL_TTL))
-                                .toList()
+                                .toList(),
+                        product.getConditionDescription()
                 ),
                 new AuctionDetailResponse.Seller(
                         seller.getId(),
@@ -265,7 +267,10 @@ public class AuctionQueryService {
                 Auction.MAX_EXTENSIONS,
                 myAutoBidStatus,
                 myCap,
-                minNextBidAmount
+                minNextBidAmount,
+                bidRepository.findFirstByAuctionIdAndUserIdOrderByIdDesc(auctionId, userId)
+                        .map(Bid::getAmount)
+                        .orElse(null)
         );
     }
 
@@ -331,7 +336,11 @@ public class AuctionQueryService {
                                     : s3UrlPresigner.presign(product.getImageUrls().get(0), IMAGE_URL_TTL),
                             candidate.getCurrentPrice(),
                             likeCounts.getOrDefault(candidate.getId(), 0L).intValue(),
-                            likedAuctionIds.contains(candidate.getId())
+                            likedAuctionIds.contains(candidate.getId()),
+                            candidate.getStatus(),
+                            product.getConditionGrade(),
+                            candidate.getStartPrice(),
+                            candidate.getCurrentPrice()
                     );
                 })
                 .toList();

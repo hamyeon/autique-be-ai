@@ -20,7 +20,9 @@ public record CreateProductRequest(
         @NotNull(message = "분석 세션 ID는 필수입니다.")
         Long analysisId,
 
-        @NotNull(message = "이미지 URL은 필수입니다.")
+        // #141: 선택값이고 등록에 쓰이지 않는다. 상품 이미지는 항상 분석 세션에 서버가 저장한
+        // 이미지로 정한다(ProductRegistrationService.resolveImageUrls). 기존 클라이언트가 보내도
+        // 깨지지 않도록 필드와 형식 검증만 남겨 둔다.
         @Size(min = 3, max = 4, message = "이미지 URL은 최소 3개, 최대 4개까지 등록할 수 있습니다.")
         List<@NotBlank(message = "이미지 URL은 비어 있을 수 없습니다.") String> imageUrls,
 
@@ -55,6 +57,11 @@ public record CreateProductRequest(
         String reason,
 
         String sellerDescription,
+
+        // #141: 판매자가 수정한 상품 상태 설명(선택). null이거나 공백뿐이면 분석 세션의 AI 상태
+        // 설명(conditionDescription)을 그대로 저장한다. sellerDescription과는 별도 컬럼에 저장한다.
+        @Size(max = 1000, message = "상태 설명은 1000자 이하여야 합니다.")
+        String conditionDescription,
 
         @NotNull(message = "경매 시작가는 필수입니다.")
         @Positive(message = "경매 시작가는 0보다 커야 합니다.")

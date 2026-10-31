@@ -18,6 +18,7 @@ import com.vintic.backend.notification.domain.NotificationType;
 import com.vintic.backend.notification.repository.NotificationRepository;
 import com.vintic.backend.notification.service.NotificationRecorder;
 import com.vintic.backend.order.domain.Order;
+import com.vintic.backend.order.domain.OrderType;
 import com.vintic.backend.order.repository.OrderRepository;
 import com.vintic.backend.config.ClockConfig;
 import com.vintic.backend.product.domain.Product;
@@ -132,6 +133,7 @@ class BackupOfferCommandServiceTest {
         assertThat(orderRepository.count()).isEqualTo(1);
         Order order = orderRepository.findByAuctionIdAndBuyerId(auction.getId(), rank2.getId()).orElseThrow();
         assertThat(order.getPurchasePrice()).isEqualTo(20000L); // = offer.purchasePrice, auction.finalPrice(30000)가 아니다.
+        assertThat(order.getOrderType()).isEqualTo(OrderType.BACKUP_ACCEPT); // #141
         // paymentDeadline = 수락 시각(주입된 Clock 기준) + 24h(§0.10) - createdAt/deadline(제안
         // 자체의 필드)과 무관하다.
         assertThat(order.getPaymentDeadline()).isCloseTo(FIXED_NOW.plusHours(24), within(5, ChronoUnit.SECONDS));

@@ -10,6 +10,7 @@ import com.vintic.backend.bid.domain.BidType;
 import com.vintic.backend.bid.repository.BidRepository;
 import com.vintic.backend.common.util.S3UrlPresigner;
 import com.vintic.backend.order.domain.Order;
+import com.vintic.backend.order.domain.OrderStatus;
 import com.vintic.backend.order.repository.OrderRepository;
 import com.vintic.backend.penalty.domain.Penalty;
 import com.vintic.backend.penalty.repository.PenaltyRepository;
@@ -310,6 +311,106 @@ class AuctionResultQueryServiceTest {
         assertThat(response.result()).isEqualTo(AuctionResult.WON);
         assertThat(response.finalPrice()).isEqualTo(20000L);
         assertThat(response.totalAmount()).isEqualTo(23000L);
+    }
+
+    // ===== #141 orderStatus =====
+
+    private Auction endedAuctionWonBy(User winner, User loser) {
+        User seller = persistUser("seller@vintic.local");
+        Product product = persistProduct(seller);
+        Auction auction = persistLiveAuction(product);
+        bidRepository.save(Bid.place(auction, loser, 20000L, BidType.MANUAL));
+        auction.placeManualBid(loser, 20000L);
+        bidRepository.save(Bid.place(auction, winner, 30000L, BidType.MANUAL));
+        auction.placeManualBid(winner, 30000L);
+        auction.end();
+        return auction;
+    }
+
+    @Test
+    void 주문이_없으면_orderStatus는_null이다() {
+        User winner = persistUser("winner@vintic.local");
+        User loser = persistUser("loser@vintic.local");
+        Auction auction = endedAuctionWonBy(winner, loser);
+        flushAndClear();
+
+        AuctionResultResponse response = auctionResultQueryService.getResult(auction.getId(), winner.getId());
+
+        assertThat(response.orderStatus()).isNull();
+        assertThat(response.orderId()).isNull();
+    }
+
+    @Test
+    void 결제_대기_주문이면_WON과_orderStatus_PAYMENT_PENDING을_반환한다() {
+        User winner = persistUser("winner@vintic.local");
+        User loser = persistUser("loser@vintic.local");
+        Auction auction = endedAuctionWonBy(winner, loser);
+        Order order = orderRepository.save(Order.createForWinner(
+                auction, winner, auction.getCurrentPrice(), 3000L, auction.getEndAt().plusHours(24)
+        ));
+        flushAndClear();
+
+        AuctionResultResponse response = auctionResultQueryService.getResult(auction.getId(), winner.getId());
+
+        assertThat(response.result()).isEqualTo(AuctionResult.WON);
+        assertThat(response.orderStatus()).isEqualTo(OrderStatus.PAYMENT_PENDING);
+        assertThat(response.orderId()).isEqualTo(order.getId());
+    }
+
+    @Test
+    void 결제_완료_주문이어도_WON이_유지되고_orderStatus는_PAID다() {
+        User winner = persistUser("winner@vintic.local");
+        User loser = persistUser("loser@vintic.local");
+        Auction auction = endedAuctionWonBy(winner, loser);
+        Order order = orderRepository.save(Order.createForWinner(
+                auction, winner, auction.getCurrentPrice(), 3000L, auction.getEndAt().plusHours(24)
+        ));
+        order.pay(LocalDateTime.now());
+        flushAndClear();
+
+        AuctionResultResponse response = auctionResultQueryService.getResult(auction.getId(), winner.getId());
+
+        assertThat(response.result()).isEqualTo(AuctionResult.WON);
+        assertThat(response.orderStatus()).isEqualTo(OrderStatus.PAID);
+        assertThat(response.orderId()).isEqualTo(order.getId());
+    }
+
+    @Test
+    void 결제_기한_만료_주문이면_PAYMENT_EXPIRED와_orderStatus_PAYMENT_EXPIRED를_반환한다() {
+        User winner = persistUser("winner@vintic.local");
+        User loser = persistUser("loser@vintic.local");
+        Auction auction = endedAuctionWonBy(winner, loser);
+        Order order = orderRepository.save(Order.createForWinner(
+                auction, winner, auction.getCurrentPrice(), 3000L, auction.getEndAt().plusHours(24)
+        ));
+        order.expire();
+        flushAndClear();
+
+        AuctionResultResponse response = auctionResultQueryService.getResult(auction.getId(), winner.getId());
+
+        assertThat(response.result()).isEqualTo(AuctionResult.PAYMENT_EXPIRED);
+        assertThat(response.orderStatus()).isEqualTo(OrderStatus.PAYMENT_EXPIRED);
+        // 기존 계약 그대로 orderId는 WON일 때만 채운다.
+        assertThat(response.orderId()).isNull();
+    }
+
+    @Test
+    void 다른_사용자의_주문_상태는_노출되지_않는다() {
+        User winner = persistUser("winner@vintic.local");
+        User loser = persistUser("loser@vintic.local");
+        Auction auction = endedAuctionWonBy(winner, loser);
+        Order order = orderRepository.save(Order.createForWinner(
+                auction, winner, auction.getCurrentPrice(), 3000L, auction.getEndAt().plusHours(24)
+        ));
+        order.pay(LocalDateTime.now());
+        flushAndClear();
+
+        AuctionResultResponse response = auctionResultQueryService.getResult(auction.getId(), loser.getId());
+
+        assertThat(response.result()).isEqualTo(AuctionResult.LOST);
+        assertThat(response.orderStatus()).isNull();
+        assertThat(response.orderId()).isNull();
+        assertThat(response.paymentDeadline()).isNull();
     }
 
     @Test

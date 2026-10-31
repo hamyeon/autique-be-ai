@@ -27,6 +27,10 @@ public record AuctionLiveResponse(
         int maxExtensions,
         AutoBidSettingStatus myAutoBidStatus,
         Long myCap,
-        Long minCapAmount
+        Long minCapAmount,
+        // #141: 조회자 본인이 이 경매에 실제로 남긴 마지막 Bid 금액(수동 입찰이든 자동입찰 엔진이
+        // 대신 넣은 입찰이든 Bid 행으로 저장된 것). Bid가 없으면 null - 자동입찰 설정(myCap)만
+        // 있고 아직 Bid가 만들어지지 않았으면 null이다. isMine(현재 최고 입찰자 여부)과 별개다.
+        Long myLastBidAmount
 ) {
 }

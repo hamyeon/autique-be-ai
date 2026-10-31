@@ -66,6 +66,13 @@ public class Order {
     @Column(nullable = false)
     private OrderStatus status;
 
+    // #141: 새 주문은 두 팩토리가 항상 채운다. nullable인 이유는 이 컬럼 이전에 만들어진 주문 중
+    // 근거(차순위 수락 기록·경매 최종 낙찰자)로 유형을 확정하지 못한 행이 null로 남기 때문이다 -
+    // 기본값으로 WINNER를 채워 넣지 않는다.
+    @Enumerated(EnumType.STRING)
+    @Column(name = "order_type")
+    private OrderType orderType;
+
     @Column(nullable = false)
     private LocalDateTime paymentDeadline;
 
@@ -81,7 +88,7 @@ public class Order {
     public static Order createForWinner(
             Auction auction, User buyer, Long purchasePrice, Long shippingFee, LocalDateTime paymentDeadline
     ) {
-        return create(auction, buyer, purchasePrice, shippingFee, paymentDeadline);
+        return create(OrderType.WINNER, auction, buyer, purchasePrice, shippingFee, paymentDeadline);
     }
 
     // 차순위 수락자용 Order(#56-3, §16). purchasePrice = BackupOffer.purchasePrice(그 후보의
@@ -89,13 +96,14 @@ public class Order {
     public static Order createForBackupAccept(
             Auction auction, User buyer, Long purchasePrice, Long shippingFee, LocalDateTime paymentDeadline
     ) {
-        return create(auction, buyer, purchasePrice, shippingFee, paymentDeadline);
+        return create(OrderType.BACKUP_ACCEPT, auction, buyer, purchasePrice, shippingFee, paymentDeadline);
     }
 
     // totalAmount는 여기서 purchasePrice+shippingFee로 계산해 호출자가 직접 더하는 곳이 여러
     // 군데로 흩어지지 않게 한다.
     private static Order create(
-            Auction auction, User buyer, Long purchasePrice, Long shippingFee, LocalDateTime paymentDeadline
+            OrderType orderType, Auction auction, User buyer, Long purchasePrice, Long shippingFee,
+            LocalDateTime paymentDeadline
     ) {
         if (auction == null) {
             throw new IllegalArgumentException("경매는 필수입니다.");
@@ -120,6 +128,7 @@ public class Order {
         order.shippingFee = shippingFee;
         order.totalAmount = purchasePrice + shippingFee;
         order.status = OrderStatus.PAYMENT_PENDING;
+        order.orderType = orderType;
         order.paymentDeadline = paymentDeadline;
         order.createdAt = LocalDateTime.now();
         return order;
@@ -192,6 +201,10 @@ public class Order {
 
     public OrderStatus getStatus() {
         return status;
+    }
+
+    public OrderType getOrderType() {
+        return orderType;
     }
 
     public LocalDateTime getPaymentDeadline() {

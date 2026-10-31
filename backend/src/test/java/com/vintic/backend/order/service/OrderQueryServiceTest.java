@@ -7,6 +7,7 @@ import com.vintic.backend.common.util.S3UrlPresigner;
 import com.vintic.backend.config.ClockConfig;
 import com.vintic.backend.order.domain.Order;
 import com.vintic.backend.order.domain.OrderStatus;
+import com.vintic.backend.order.domain.OrderType;
 import com.vintic.backend.order.dto.OrderResponse;
 import com.vintic.backend.order.repository.OrderRepository;
 import com.vintic.backend.product.domain.Product;
@@ -151,5 +152,60 @@ class OrderQueryServiceTest {
     void 존재하지_않는_주문을_조회하면_예외가_발생한다() {
         assertThatThrownBy(() -> orderQueryService.getOrder(9999L, 1L))
                 .isInstanceOf(OrderNotFoundException.class);
+    }
+
+    // ===== #141 orderType =====
+
+    @Test
+    void 낙찰자_주문_조회는_orderType_WINNER를_반환한다() {
+        User seller = persistUser("seller@vintic.local");
+        User winner = persistUser("winner@vintic.local");
+        Auction auction = persistEndedAuction(persistProduct(seller), winner);
+        Order order = orderRepository.save(Order.createForWinner(
+                auction, winner, 30000L, 3000L, auction.getEndAt().plusHours(24)
+        ));
+        flushAndClear();
+
+        OrderResponse response = orderQueryService.getOrder(order.getId(), winner.getId());
+
+        assertThat(response.orderType()).isEqualTo(OrderType.WINNER);
+    }
+
+    @Test
+    void 차순위_수락_주문_조회는_orderType_BACKUP_ACCEPT를_반환한다() {
+        User seller = persistUser("seller@vintic.local");
+        User winner = persistUser("winner@vintic.local");
+        User backup = persistUser("backup@vintic.local");
+        Auction auction = persistEndedAuction(persistProduct(seller), winner);
+        Order order = orderRepository.save(Order.createForBackupAccept(
+                auction, backup, 25000L, 3000L, FIXED_NOW.plusHours(24)
+        ));
+        flushAndClear();
+
+        OrderResponse response = orderQueryService.getOrder(order.getId(), backup.getId());
+
+        assertThat(response.orderType()).isEqualTo(OrderType.BACKUP_ACCEPT);
+        assertThat(response.purchasePrice()).isEqualTo(25000L);
+    }
+
+    @Test
+    void 유형이_없는_기존_주문은_orderType_null로_조회된다() {
+        User seller = persistUser("seller@vintic.local");
+        User winner = persistUser("winner@vintic.local");
+        Auction auction = persistEndedAuction(persistProduct(seller), winner);
+        Order order = orderRepository.save(Order.createForWinner(
+                auction, winner, 30000L, 3000L, auction.getEndAt().plusHours(24)
+        ));
+        entityManager.flush();
+        // order_type 컬럼이 생기기 전에 만들어져 보정되지 않은 행을 재현한다.
+        entityManager.createNativeQuery("UPDATE orders SET order_type = NULL WHERE id = :id")
+                .setParameter("id", order.getId())
+                .executeUpdate();
+        entityManager.clear();
+
+        OrderResponse response = orderQueryService.getOrder(order.getId(), winner.getId());
+
+        assertThat(response.orderType()).isNull();
+        assertThat(response.status()).isEqualTo(OrderStatus.PAYMENT_PENDING);
     }
 }

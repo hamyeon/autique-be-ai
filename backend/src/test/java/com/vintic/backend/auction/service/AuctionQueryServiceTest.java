@@ -159,6 +159,36 @@ class AuctionQueryServiceTest {
     }
 
     @Test
+    void 상세조회는_저장된_상태_설명을_판매자_설명과_따로_반환한다() {
+        User seller = persistUser("seller@vintic.local");
+        Product product = new Product(
+                seller, List.of("https://example.com/a.jpg"), "Nike", "Dunk Low", "Panda", 270, "B", "PARTIAL",
+                300000, 350000, "285,000원 ~ 315,000원", 290000, "사유", "판매자 설명", "앞코 주름이 있습니다."
+        );
+        entityManager.persist(product);
+        Auction auction = persistLiveAuction(product);
+        flushAndClear();
+
+        AuctionDetailResponse response = auctionQueryService.getAuctionDetail(auction.getId(), null);
+
+        assertThat(response.product().conditionDescription()).isEqualTo("앞코 주름이 있습니다.");
+        assertThat(response.description()).isEqualTo("판매자 설명");
+    }
+
+    @Test
+    void 상태_설명이_없는_기존_상품은_상세조회에서_conditionDescription이_null이다() {
+        User seller = persistUser("seller@vintic.local");
+        Product product = persistProduct(seller);
+        Auction auction = persistLiveAuction(product);
+        flushAndClear();
+
+        AuctionDetailResponse response = auctionQueryService.getAuctionDetail(auction.getId(), null);
+
+        assertThat(response.product().conditionDescription()).isNull();
+        assertThat(response.description()).isEqualTo("설명");
+    }
+
+    @Test
     void 상세조회는_seller_필드를_반환한다() {
         User seller = persistUser("seller@vintic.local");
         Product product = persistProduct(seller);
@@ -428,6 +458,74 @@ class AuctionQueryServiceTest {
         assertThat(response.items()).hasSize(1);
         assertThat(response.items().get(0).auctionId()).isEqualTo(sameBrandAuction.getId());
         assertThat(response.items().get(0).brand()).isEqualTo("Nike");
+    }
+
+    @Test
+    void Similar_응답은_경매_상태와_저장된_등급을_변환_없이_반환한다() {
+        User seller = persistUser("seller@vintic.local");
+        Product product = persistProduct(seller);
+        Auction auction = persistLiveAuction(product);
+
+        // LIVE 1건 + SCHEDULED 1건. 등급은 Vision 범위 밖의 값(S)도 그대로 내려가는지 본다.
+        Product liveProduct = new Product(
+                seller, List.of("https://example.com/b.jpg"), "Nike", "Air Max", "White", 270, "S", "FULL",
+                200000, 250000, "190,000원 ~ 210,000원", 195000, "사유2", "설명2"
+        );
+        entityManager.persist(liveProduct);
+        Auction liveAuction = persistLiveAuction(liveProduct);
+
+        Product scheduledProduct = new Product(
+                seller, List.of("https://example.com/c.jpg"), "Nike", "Cortez", "Red", 270, "DS", "FULL",
+                150000, 180000, "140,000원 ~ 160,000원", 145000, "사유3", "설명3"
+        );
+        entityManager.persist(scheduledProduct);
+        Auction scheduledAuction = Auction.schedule(
+                scheduledProduct, 10000L, 5000L, LocalDateTime.now().plusHours(1), LocalDateTime.now().plusHours(3)
+        );
+        entityManager.persist(scheduledAuction);
+        flushAndClear();
+
+        SimilarAuctionsResponse response = auctionQueryService.getSimilarAuctions(auction.getId(), null);
+
+        assertThat(response.items()).hasSize(2);
+        SimilarAuctionsResponse.Item live = response.items().stream()
+                .filter(item -> item.auctionId().equals(liveAuction.getId())).findFirst().orElseThrow();
+        SimilarAuctionsResponse.Item scheduled = response.items().stream()
+                .filter(item -> item.auctionId().equals(scheduledAuction.getId())).findFirst().orElseThrow();
+        assertThat(live.status()).isEqualTo(AuctionStatus.LIVE);
+        assertThat(live.grade()).isEqualTo("S");
+        assertThat(scheduled.status()).isEqualTo(AuctionStatus.SCHEDULED);
+        assertThat(scheduled.grade()).isEqualTo("DS");
+        // 입찰 전이라 price(currentPrice)는 시작가와 같다.
+        assertThat(scheduled.price()).isEqualTo(10000L);
+    }
+
+    @Test
+    void Similar_응답은_시작가와_현재가를_함께_반환하고_기존_price를_유지한다() {
+        User seller = persistUser("seller@vintic.local");
+        User bidder = persistUser("bidder@vintic.local");
+        Product product = persistProduct(seller);
+        Auction auction = persistLiveAuction(product);
+
+        Product otherProduct = new Product(
+                seller, List.of("https://example.com/b.jpg"), "Nike", "Air Max", "White", 270, "A", "FULL",
+                200000, 250000, "190,000원 ~ 210,000원", 195000, "사유2", "설명2"
+        );
+        entityManager.persist(otherProduct);
+        Auction otherAuction = persistLiveAuction(otherProduct);
+        otherAuction.placeManualBid(bidder, 15000L);
+        flushAndClear();
+
+        SimilarAuctionsResponse response = auctionQueryService.getSimilarAuctions(auction.getId(), null);
+
+        assertThat(response.items()).hasSize(1);
+        SimilarAuctionsResponse.Item item = response.items().get(0);
+        assertThat(item.startPrice()).isEqualTo(10000L);
+        assertThat(item.currentPrice()).isEqualTo(15000L);
+        assertThat(item.price()).isEqualTo(item.currentPrice());
+        assertThat(item.status()).isEqualTo(AuctionStatus.LIVE);
+        assertThat(item.grade()).isEqualTo("A");
+        assertThat(item.thumbnailUrl()).isEqualTo("https://example.com/b.jpg");
     }
 
     @Test
@@ -823,6 +921,81 @@ class AuctionQueryServiceTest {
 
         assertThat(response.myAutoBidStatus()).isNull();
         assertThat(response.myCap()).isNull();
+    }
+
+    // ===== #141 /live myLastBidAmount =====
+
+    @Test
+    void live_조회시_내_입찰이_없으면_myLastBidAmount는_null이다() {
+        User seller = persistUser("seller@vintic.local");
+        User bidder = persistUser("bidder@vintic.local");
+        User other = persistUser("other@vintic.local");
+        Product product = persistProduct(seller);
+        Auction auction = persistLiveAuction(product);
+        auction.placeManualBid(other, 15000L);
+        entityManager.persist(Bid.place(auction, other, 15000L, BidType.MANUAL));
+        flushAndClear();
+
+        AuctionLiveResponse response = auctionQueryService.getLiveView(auction.getId(), bidder.getId());
+
+        assertThat(response.myLastBidAmount()).isNull();
+    }
+
+    @Test
+    void live_조회시_myLastBidAmount는_조회자_본인의_마지막_입찰_금액이다() {
+        User seller = persistUser("seller@vintic.local");
+        User bidder = persistUser("bidder@vintic.local");
+        User other = persistUser("other@vintic.local");
+        Product product = persistProduct(seller);
+        Auction auction = persistLiveAuction(product);
+        auction.placeManualBid(bidder, 15000L);
+        entityManager.persist(Bid.place(auction, bidder, 15000L, BidType.MANUAL));
+        auction.placeManualBid(other, 20000L);
+        entityManager.persist(Bid.place(auction, other, 20000L, BidType.MANUAL));
+        auction.placeManualBid(bidder, 25000L);
+        entityManager.persist(Bid.place(auction, bidder, 25000L, BidType.MANUAL));
+        flushAndClear();
+
+        AuctionLiveResponse mine = auctionQueryService.getLiveView(auction.getId(), bidder.getId());
+        AuctionLiveResponse others = auctionQueryService.getLiveView(auction.getId(), other.getId());
+
+        assertThat(mine.myLastBidAmount()).isEqualTo(25000L);
+        assertThat(mine.isMine()).isTrue();
+        // 밀린 입찰자도 자신의 실제 입찰 금액을 받는다 - isMine(최고 입찰자 여부)과 별개다.
+        assertThat(others.myLastBidAmount()).isEqualTo(20000L);
+        assertThat(others.isMine()).isFalse();
+    }
+
+    @Test
+    void live_조회시_자동입찰_설정만_있고_입찰이_없으면_myLastBidAmount는_null이다() {
+        User seller = persistUser("seller@vintic.local");
+        User bidder = persistUser("bidder@vintic.local");
+        Product product = persistProduct(seller);
+        Auction auction = persistLiveAuction(product);
+        AutoBidSetting setting = AutoBidSetting.reserve(auction, bidder, 100000L);
+        setting.activate();
+        entityManager.persist(setting);
+        flushAndClear();
+
+        AuctionLiveResponse response = auctionQueryService.getLiveView(auction.getId(), bidder.getId());
+
+        assertThat(response.myCap()).isEqualTo(100000L);
+        assertThat(response.myLastBidAmount()).isNull();
+    }
+
+    @Test
+    void live_조회시_자동입찰로_실제_저장된_입찰은_myLastBidAmount에_반영된다() {
+        User seller = persistUser("seller@vintic.local");
+        User bidder = persistUser("bidder@vintic.local");
+        Product product = persistProduct(seller);
+        Auction auction = persistLiveAuction(product);
+        auction.placeManualBid(bidder, 15000L);
+        entityManager.persist(Bid.place(auction, bidder, 15000L, BidType.AUTO));
+        flushAndClear();
+
+        AuctionLiveResponse response = auctionQueryService.getLiveView(auction.getId(), bidder.getId());
+
+        assertThat(response.myLastBidAmount()).isEqualTo(15000L);
     }
 
     @Test
