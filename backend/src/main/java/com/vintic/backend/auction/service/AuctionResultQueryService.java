@@ -156,7 +156,11 @@ public class AuctionResultQueryService {
                 TimePolicy.toApiTime(LocalDateTime.now(clock)),
                 orderId,
                 backupOfferId,
-                backupEligible
+                backupEligible,
+                // #141: order는 findByAuctionIdAndBuyerId(auctionId, userId)로 조회자 본인 것만
+                // 읽었으므로 타인의 주문 상태는 들어올 수 없다. result 판정과 무관하게 저장된
+                // 상태를 그대로 내보낸다(주문이 없으면 null).
+                order.map(Order::getStatus).orElse(null)
         );
     }
 

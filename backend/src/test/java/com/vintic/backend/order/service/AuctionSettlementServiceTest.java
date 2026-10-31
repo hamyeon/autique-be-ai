@@ -11,6 +11,7 @@ import com.vintic.backend.notification.repository.NotificationRepository;
 import com.vintic.backend.notification.service.NotificationRecorder;
 import com.vintic.backend.order.domain.Order;
 import com.vintic.backend.order.domain.OrderStatus;
+import com.vintic.backend.order.domain.OrderType;
 import com.vintic.backend.order.repository.OrderRepository;
 import com.vintic.backend.product.domain.Product;
 import com.vintic.backend.support.TestClockConfig;
@@ -112,6 +113,7 @@ class AuctionSettlementServiceTest {
         assertThat(order.getShippingFee()).isEqualTo(3000L);
         assertThat(order.getTotalAmount()).isEqualTo(33000L);
         assertThat(order.getStatus()).isEqualTo(OrderStatus.PAYMENT_PENDING);
+        assertThat(order.getOrderType()).isEqualTo(OrderType.WINNER); // #141
         // paymentDeadline = auction.endsAt + 24h (FINAL contract §0.10). H2 컬럼이 nanosecond
         // 정밀도를 그대로 보존하지 않아(마이크로초로 절삭) 초 단위 근접만 확인한다 - 이미 코드베이스
         // 전반에서 쓰는 패턴(AuctionQueryServiceTest의 endsAt/bidRestrictedUntil 비교와 동일).

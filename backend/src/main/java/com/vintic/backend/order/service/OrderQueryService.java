@@ -64,7 +64,8 @@ public class OrderQueryService {
                 order.getTotalAmount(),
                 TimePolicy.toApiTime(order.getPaymentDeadline()),
                 TimePolicy.toApiTime(LocalDateTime.now(clock)),
-                TimePolicy.toApiTime(order.getPaidAt())
+                TimePolicy.toApiTime(order.getPaidAt()),
+                order.getOrderType()
         );
     }
 }

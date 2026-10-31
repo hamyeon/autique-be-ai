@@ -185,9 +185,14 @@ class FullFlowE2EMySqlIT {
     // #127: CreateProductRequest.analysisId가 필수가 됐고, 세션은 한 번 등록에 쓰이면
     // (confirmRegistration()) 재사용할 수 없다 - registerProduct()를 호출할 때마다 새 세션을
     // 만든다. confirmRegistration()의 조건은 "취소되지 않았고 아직 등록에 안 쓰였음"뿐이라,
-    // Vision/Pricing을 거치지 않은 방금 만든(CREATED) 세션으로도 충분하다.
+    // Vision/Pricing을 거치지 않은 세션으로도 충분하다. #141: 등록 이미지는 세션 이미지로만 정하므로
+    // 업로드 직후(markImageUploaded) 세션으로 만든다 - multipart 분석이 서버 업로드 원본을 기록하는 단계다.
     private Long newRegistrableSession() {
-        return sessionRepository.save(ProductAnalysisSession.create(sellerId)).getId();
+        ProductAnalysisSession session = ProductAnalysisSession.create(sellerId);
+        session.markImageUploaded(java.util.List.of(
+                "https://example.com/a.jpg", "https://example.com/b.jpg", "https://example.com/c.jpg"
+        ));
+        return sessionRepository.save(session).getId();
     }
 
     private RegisteredProduct registerProduct() throws Exception {

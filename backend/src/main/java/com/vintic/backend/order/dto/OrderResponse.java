@@ -1,6 +1,7 @@
 package com.vintic.backend.order.dto;
 
 import com.vintic.backend.order.domain.OrderStatus;
+import com.vintic.backend.order.domain.OrderType;
 
 import java.time.OffsetDateTime;
 
@@ -15,7 +16,10 @@ public record OrderResponse(
         Long totalAmount,
         OffsetDateTime paymentDeadline,
         OffsetDateTime serverTime,
-        OffsetDateTime paidAt
+        OffsetDateTime paidAt,
+        // #141: WINNER(최초 낙찰) / BACKUP_ACCEPT(차순위 수락). 이 필드 도입 전 주문 중 유형을
+        // 식별하지 못한 행은 null이다(신규 주문은 항상 값이 있다).
+        OrderType orderType
 ) {
     public record Product(
             Long productId,

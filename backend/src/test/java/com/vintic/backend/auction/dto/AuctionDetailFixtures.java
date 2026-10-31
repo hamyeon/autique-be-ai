@@ -18,7 +18,7 @@ public final class AuctionDetailFixtures {
         return new AuctionDetailResponse(
                 1L,
                 AuctionStatus.LIVE,
-                new AuctionDetailResponse.Product(10L, "Nike Dunk Low Panda", "Nike", "Dunk Low", "B", List.of("https://example.com/a.jpg")),
+                new AuctionDetailResponse.Product(10L, "Nike Dunk Low Panda", "Nike", "Dunk Low", "B", List.of("https://example.com/a.jpg"), null),
                 new AuctionDetailResponse.Seller(100L, "seller", null, 0),
                 "설명",
                 10000L,

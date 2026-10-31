@@ -482,9 +482,16 @@ Authorization: Bearer {accessToken}
 | —— productId | Long | 상품 ID | O |
 | —— name | String | 상품명 | O |
 | —— brand | String | 브랜드 | O |
-| —— subName | String | 영문 상품명 | O |
-| —— grade | String | 상품 등급 (A / B / C) | O |
-| —— imageUrls | Array<String> | 상품 이미지 목록 | O |
+| —— subName | String | 모델명(`Product.model` 그대로 — 아래 "상품 표시명 규칙") | O |
+| —— grade | String | 상품 등급. 등록 시 저장된 `conditionGrade` 문자열을 변환 없이 그대로 반환한다(A/B/C만 오는 것이 아니다 — `DS`/`S`/`UNKNOWN` 등도 올 수 있음, spec.md "상태 등급 정리" 참고) | O |
+| —— imageUrls | Array<String> | 상품 이미지 목록(조회마다 새로 서명한 24시간 유효 URL) | O |
+| —— conditionDescription | String | 상품 상태 설명 (#141). 등록 시 판매자가 수정해 보낸 값, 생략했으면 AI 분석의 상태 설명. 상위 `description`(판매자 설명)과 별개 값이다. **이 필드 도입 전에 등록된 상품, 또는 상태 설명 없이 등록된 상품은 `null`** — FE는 null이면 상태 설명 영역을 숨긴다 | X |
+
+**상품 표시명 규칙(`ProductDisplayName`, #141 정정).** Product에는 별도 상품명/영문명 컬럼이 없다.
+`name` = `brand` + `modelName` + `color`를 공백으로 이은 값(빈 값은 건너뜀, 각 값 trim), `subName` =
+등록 시 입력한 `modelName` 그대로다. 아래 예시의 한글/영문 상품명은 이 규칙으로 만들어지지 않는다 —
+실제 응답은 예: `name: "Nike Dunk Low Panda"`, `subName: "Dunk Low"`. 경매 결과·주문·차순위 응답의
+`product.name`/`subName`도 같은 규칙이다.
 | — seller | Object | 판매자 정보 | O |
 | —— sellerId | Long | 판매자 ID | O |
 | —— nickname | String | 판매자 닉네임 (마스킹 없음) | O |
@@ -499,8 +506,8 @@ Authorization: Bearer {accessToken}
 | — startsAt | String | 경매 시작 시각 | O |
 | — endsAt | String | 경매 종료 시각 | O |
 | — serverTime | String | 서버 기준 현재 시각 | O |
-| — aiEstimatedPrice | Long | AI 적정 시세 | X |
-| — aiRecommendedAutoBidCap | Long | AI 추천 상한가 | X |
+| — aiEstimatedPrice | Long | AI 적정 시세 — **이 상품이 시장에서 얼마짜리인지**(조회 시 서버가 가격 엔진으로 다시 계산한 값, 판매자가 등록 때 보낸 `recommendedPrice`가 아님). 시세를 못 내면 `null`. 아래 "AI 시세와 추천 상한의 차이" 참고 | X |
+| — aiRecommendedAutoBidCap | Long | AI 추천 상한가 — **자동입찰 상한 입력칸의 초기값**. 현재는 항상 `minNextBidAmount`(= `minCapAmount`)와 같다(§4 `aiRecommendedCap`과 같은 정책). 시세와 무관 | X |
 | — aiPriceReason | String | AI 가격 산정 근거 | X |
 | — bidCount | Int | 입찰 수 | O |
 | — isLiked | Boolean | 내 관심 등록 여부 | O |
@@ -516,6 +523,15 @@ Authorization: Bearer {accessToken}
 | —— purchaseGoalId | Long | 이 경매에 연결된 내 구매 목표(Purchase Agent) ID. 없으면 null | X |
 | —— managedByPurchaseAgent | Boolean | 이 경매를 내 Purchase Agent가 관리 중인지 여부(관리 중이면 직접 입찰·자동입찰 수정/취소가 `40917`로 차단된다 — §Purchase Agent 관리 중 제한) | O |
 | — finalPrice | Long | 최종 낙찰가 (ENDED에서만) | X |
+
+**AI 시세와 추천 상한의 차이 (#141).**
+
+| 필드 | 의미 | 출처 | 값이 바뀌는 시점 |
+| --- | --- | --- | --- |
+| `aiEstimatedPrice` (§1) | 이 상품의 적정 시세(얼마짜리 물건인가) | 조회 시 서버 가격 엔진(`PriceEstimateProvider`)이 상품의 브랜드·모델·색상·사이즈·등급으로 계산 | 입찰과 무관. 카탈로그 밖 모델이면 `null` |
+| `aiRecommendedAutoBidCap` (§1), `aiRecommendedCap` (§4) | 자동입찰 상한 입력칸 초기값(얼마까지 걸지 제안) | 구매자용 추천 소스가 아직 없어 **항상 `minCapAmount`(= 최소 다음 입찰가)** | 현재가가 오를 때마다 함께 오름 |
+
+두 값은 비교하거나 합쳐 쓰는 값이 아니다. "AI 추천 상한"이 시세를 반영한다고 표시하지 않는다.
 
 **`myState.cannotBidReason`** **enum**
 
@@ -539,14 +555,15 @@ ALREADY_HIGHEST_BIDDER
     "status": "SCHEDULED",
     "product": {
       "productId": 10,
-      "name": "아식스 노바블라스트 6 블랙 - 2E 와이드",
+      "name": "ASICS Novablast 6 Black",
       "brand": "ASICS",
-      "subName": "Asics Novablast 6 Black - 2E Wide",
+      "subName": "Novablast 6",
       "grade": "A",
       "imageUrls": [
         "https://...",
         "https://..."
-      ]
+      ],
+      "conditionDescription": "토박스에 얕은 주름이 있고 아웃솔에 사용감이 있습니다."
     },
     "seller": {
       "sellerId": 2,
@@ -564,7 +581,7 @@ ALREADY_HIGHEST_BIDDER
     "endsAt": "2026-08-17T22:00:00+09:00",
     "serverTime": "2026-08-17T17:30:00+09:00",
     "aiEstimatedPrice": 100000,
-    "aiRecommendedAutoBidCap": 100000,
+    "aiRecommendedAutoBidCap": 55000,
     "aiPriceReason": "유사 거래 데이터를 기반으로 산정했습니다.",
     "bidCount": 0,
     "isLiked": false,
@@ -690,8 +707,18 @@ Authorization: Bearer {accessToken}
 | — myAutoBidStatus | String | 내 자동입찰 상태 (미사용 시 null) | X |
 | — myCap | Long | 내 자동입찰 상한가 (미사용 시 null) | X |
 | — minCapAmount | Long | 자동입찰 최소 상한가 | O |
+| — myLastBidAmount | Long | 내가 이 경매에 실제로 남긴 마지막 입찰 금액 (#141). 실제 입찰 이력이 없으면 `null` | X |
 
 `minCapAmount`는 상한가 수정 바텀시트의 최소값으로 쓰이므로 **모든 응답에 포함**한다.
+
+**`myLastBidAmount` (#141).** 로그인 사용자 본인의 입찰 기록(`bids` 행) 중 가장 최근 것의 금액이다. 한
+사용자의 입찰 금액은 시간 순으로 항상 커지므로 "마지막 입찰 = 내 최고 입찰"이다(`/result`의 `myLastBidAmount`와 같은 기준).
+
+- 직접 입찰과, 자동입찰 엔진이 내 상한 안에서 **실제로 넣은 입찰**(`bidType = AUTO`)을 모두 센다.
+- 자동입찰을 예약·설정만 하고(`myAutoBidStatus`/`myCap`만 있음) 아직 입찰이 만들어지지 않았으면 `null`이다.
+- `isMine`과 의미가 다르다 — `isMine`은 "지금 내가 최고 입찰자인가"이고, `myLastBidAmount`는 "내가 입찰한 적이
+  있는가, 얼마였나"다. 밀린 입찰자는 `isMine = false`이면서 `myLastBidAmount`에 값이 있다.
+- 이 API는 로그인 필수라 비로그인 응답은 없다(`401`).
 
 `canBid`, `cannotBidReason`, `bidRestrictedUntil`은 경매 상세의 `myState`와 동일한 직접 입찰 가능성 규칙을 사용한다.
 
@@ -731,7 +758,8 @@ ALREADY_HIGHEST_BIDDER
     "maxExtensions": 3,
     "myAutoBidStatus": "ACTIVE",
     "myCap": 120000,
-    "minCapAmount": 110000
+    "minCapAmount": 110000,
+    "myLastBidAmount": 105000
   },
   "error": null
 }
@@ -759,7 +787,8 @@ ALREADY_HIGHEST_BIDDER
     "maxExtensions": 3,
     "myAutoBidStatus": "CAP_REACHED",
     "myCap": 120000,
-    "minCapAmount": 130000
+    "minCapAmount": 130000,
+    "myLastBidAmount": 120000
   },
   "error": null
 }
@@ -957,7 +986,7 @@ Authorization: Bearer {accessToken}
 | error | Object | null | O |
 | data | Object | API 관련 데이터 | O |
 | — auctionId | Long | 경매 ID | O |
-| — aiRecommendedCap | Long | AI 추천 상한가 (stepper 초기값) | O |
+| — aiRecommendedCap | Long | AI 추천 상한가 (stepper 초기값). 현재는 항상 `minCapAmount`와 같다. §1 `aiEstimatedPrice`(AI 적정 시세)와 다른 값이다 — §1 "AI 시세와 추천 상한의 차이" 참고 | O |
 | — currentPrice | Long | 현재가 | O |
 | — minCapAmount | Long | 최소 상한가 (stepper 하한) | O |
 | — bidIncrement | Long | stepper 증감 단위 | O |
@@ -986,7 +1015,7 @@ AutoBid 추천 소스로 재사용하지 않는다. buyer 전용 추천 소스�
   "success": true,
   "data": {
     "auctionId": 1,
-    "aiRecommendedCap": 100000,
+    "aiRecommendedCap": 55000,
     "currentPrice": 50000,
     "minCapAmount": 55000,
     "bidIncrement": 5000
@@ -1866,7 +1895,7 @@ Authorization: Bearer {accessToken}
 | — product | Object | 상품 요약 | O |
 | —— productId | Long | 상품 ID | O |
 | —— name | String | 상품명 | O |
-| —— subName | String | 영문 상품명 | O |
+| —— subName | String | 모델명(§1 "상품 표시명 규칙") | O |
 | —— imageUrl | String | 대표 이미지 | O |
 | — rank | Int | 내 순위 | X |
 | — finalPrice | Long | 최종 낙찰가 | X |
@@ -1878,8 +1907,28 @@ Authorization: Bearer {accessToken}
 | — orderId | Long | 주문 ID (WON일 때만) | X |
 | — backupOfferId | Long | 차순위 제안 ID (BACKUP_WAITING일 때만) | X |
 | — backupEligible | Boolean | 차순위 후보 자격 여부 | O |
+| — orderStatus | String | **조회자 본인**의 이 경매 주문 상태: `PAYMENT_PENDING` / `PAID` / `PAYMENT_EXPIRED` / `CANCELED`. 본인 주문이 없으면 `null` (#141) | X |
 
 `orderId`는 `result = WON`일 때만, `backupOfferId`는 `result = BACKUP_WAITING`일 때만 값을 갖는다. 프론트는 이 두 값으로 결제 화면과 차순위 구매 기회 화면에 진입한다.
+
+**`orderStatus` (#141 추가).** 서버는 `(auctionId, 로그인 사용자)`로 본인 주문만 조회하므로 다른 사용자의
+주문 상태·ID는 이 필드로 노출되지 않는다(낙찰자가 아닌 사용자는 낙찰자가 결제했더라도 `null`). 원 낙찰
+주문과 차순위 수락 주문을 구분하지 않는다(Order에 구분 정보가 없다). `result` 판정은 바뀌지 않았다 —
+`result = WON`은 여전히 `PAYMENT_PENDING`과 `PAID`를 모두 포함하므로(결제 완료자도 낙찰자다), 결제
+여부는 `orderStatus`로 구분한다.
+
+| result | orderStatus | orderId | FE 처리 예시 |
+| --- | --- | --- | --- |
+| `WON` | `PAYMENT_PENDING` | 값 있음 | "결제하기" 버튼 → `GET /api/orders/{orderId}`. `paymentDeadline`(+`serverTime`)으로 남은 시간 표시 |
+| `WON` | `PAID` | 값 있음 | "결제 완료" 표시. 결제 버튼 숨김 |
+| `PAYMENT_EXPIRED` | `PAYMENT_EXPIRED` | `null` | "결제 기한 만료" 표시, 이어서 `GET /api/me/penalties` |
+| `FORFEITED` | `CANCELED` | `null` | "낙찰 포기" 표시 |
+| `NO_BIDS` / `LOST` / `BACKUP_WAITING` | `null`(본인 주문 없음) | `null` | 결제 버튼 없음. `BACKUP_WAITING`은 `backupOfferId`로 차순위 화면 진입 |
+
+결제 버튼은 `result = WON && orderStatus = PAYMENT_PENDING`일 때만 표시한다. 기한 경과 여부는 서버
+스케줄러가 `PAYMENT_EXPIRED`로 전이시키기 전까지 `PAYMENT_PENDING`으로 보일 수 있으므로,
+`paymentDeadline` < `serverTime`이면 버튼을 비활성화하는 것을 권장한다(결제 API는 만료 주문에
+`40910`을 반환한다).
 
 #### 200 Ok — 낙찰
 
@@ -1891,8 +1940,8 @@ Authorization: Bearer {accessToken}
     "result": "WON",
     "product": {
       "productId": 10,
-      "name": "아식스 노바블라스트 6 블랙 - 2E 와이드",
-      "subName": "Asics Novablast 6 Black - 2E Wide",
+      "name": "ASICS Novablast 6 Black",
+      "subName": "Novablast 6",
       "imageUrl": "https://..."
     },
     "rank": 1,
@@ -1904,7 +1953,8 @@ Authorization: Bearer {accessToken}
     "serverTime": "2026-08-17T22:00:10+09:00",
     "orderId": 50,
     "backupOfferId": null,
-    "backupEligible": false
+    "backupEligible": false,
+    "orderStatus": "PAYMENT_PENDING"
   },
   "error": null
 }
@@ -1920,8 +1970,8 @@ Authorization: Bearer {accessToken}
     "result": "LOST",
     "product": {
       "productId": 10,
-      "name": "아식스 노바블라스트 6 블랙 - 2E 와이드",
-      "subName": "Asics Novablast 6 Black - 2E Wide",
+      "name": "ASICS Novablast 6 Black",
+      "subName": "Novablast 6",
       "imageUrl": "https://..."
     },
     "rank": 2,
@@ -1933,7 +1983,8 @@ Authorization: Bearer {accessToken}
     "serverTime": "2026-08-17T22:00:10+09:00",
     "orderId": null,
     "backupOfferId": null,
-    "backupEligible": true
+    "backupEligible": true,
+    "orderStatus": null
   },
   "error": null
 }
@@ -1949,8 +2000,8 @@ Authorization: Bearer {accessToken}
     "result": "BACKUP_WAITING",
     "product": {
       "productId": 10,
-      "name": "아식스 노바블라스트 6 블랙 - 2E 와이드",
-      "subName": "Asics Novablast 6 Black - 2E Wide",
+      "name": "ASICS Novablast 6 Black",
+      "subName": "Novablast 6",
       "imageUrl": "https://..."
     },
     "rank": 2,
@@ -1959,7 +2010,8 @@ Authorization: Bearer {accessToken}
     "serverTime": "2026-08-18T22:05:00+09:00",
     "orderId": null,
     "backupOfferId": 90,
-    "backupEligible": true
+    "backupEligible": true,
+    "orderStatus": null
   },
   "error": null
 }
@@ -1975,8 +2027,8 @@ Authorization: Bearer {accessToken}
     "result": "PAYMENT_EXPIRED",
     "product": {
       "productId": 10,
-      "name": "아식스 노바블라스트 6 블랙 - 2E 와이드",
-      "subName": "Asics Novablast 6 Black - 2E Wide",
+      "name": "ASICS Novablast 6 Black",
+      "subName": "Novablast 6",
       "imageUrl": "https://..."
     },
     "rank": 1,
@@ -1988,7 +2040,8 @@ Authorization: Bearer {accessToken}
     "serverTime": "2026-08-18T22:01:00+09:00",
     "orderId": null,
     "backupOfferId": null,
-    "backupEligible": false
+    "backupEligible": false,
+    "orderStatus": "PAYMENT_EXPIRED"
   },
   "error": null
 }
@@ -2224,7 +2277,7 @@ Authorization: Bearer {accessToken}
 | — product | Object | 상품 요약 | O |
 | —— productId | Long | 상품 ID | O |
 | —— name | String | 상품명 | O |
-| —— subName | String | 영문 상품명 | O |
+| —— subName | String | 모델명(§1 "상품 표시명 규칙") | O |
 | —— imageUrl | String | 대표 이미지 | O |
 | — purchasePrice | Long | 주문 기준 상품 금액 | O |
 | — shippingFee | Long | 배송비 | O |
@@ -2232,6 +2285,16 @@ Authorization: Bearer {accessToken}
 | — paymentDeadline | String | 결제 기한 | O |
 | — serverTime | String | 서버 기준 현재 시각 | O |
 | — paidAt | String | 결제 완료 시각 (미결제면 null) | X |
+| — orderType | String | 주문 유형 (#141): `WINNER`(최초 낙찰) / `BACKUP_ACCEPT`(차순위 수락). **`null` = 유형 미상** — 이 필드 도입 전에 만들어졌고 근거로 유형을 확정하지 못한 기존 주문 | X |
+
+**`orderType` (#141).** 신규 주문은 항상 값이 있다 — 경매 종료 정산(`Order.createForWinner`)이면 `WINNER`,
+차순위 제안 수락(§16, `Order.createForBackupAccept`)이면 `BACKUP_ACCEPT`. 주문 금액·결제·기한 규칙은 유형과
+무관하게 위와 같다(유형은 표시 구분용).
+
+기존 주문은 배포 후 보정 SQL(`backend/scripts/migrations/141-order-type-condition-description.sql`)로 근거가
+있는 행만 채운다. 같은 (경매, 구매자)에 `ACCEPTED` 차순위 제안이 있으면 `BACKUP_ACCEPT`, 구매자가 그 경매의
+최종 낙찰자이고 그 구매자에게 발행된 차순위 제안이 없으면 `WINNER`다. 나머지는 `null`로 남긴다(일괄 기본값 없음).
+FE는 `null`이면 유형 문구를 표시하지 않는다.
 
 #### 200 Ok — 결제 전
 
@@ -2244,8 +2307,8 @@ Authorization: Bearer {accessToken}
     "status": "PAYMENT_PENDING",
     "product": {
       "productId": 10,
-      "name": "아식스 노바블라스트 6 블랙 - 2E 와이드",
-      "subName": "Asics Novablast 6 Black - 2E Wide",
+      "name": "ASICS Novablast 6 Black",
+      "subName": "Novablast 6",
       "imageUrl": "https://..."
     },
     "purchasePrice": 105000,
@@ -2253,7 +2316,8 @@ Authorization: Bearer {accessToken}
     "totalAmount": 108000,
     "paymentDeadline": "2026-08-18T22:00:00+09:00",
     "serverTime": "2026-08-18T20:12:00+09:00",
-    "paidAt": null
+    "paidAt": null,
+    "orderType": "WINNER"
   },
   "error": null
 }
@@ -2270,8 +2334,8 @@ Authorization: Bearer {accessToken}
     "status": "PAID",
     "product": {
       "productId": 10,
-      "name": "아식스 노바블라스트 6 블랙 - 2E 와이드",
-      "subName": "Asics Novablast 6 Black - 2E Wide",
+      "name": "ASICS Novablast 6 Black",
+      "subName": "Novablast 6",
       "imageUrl": "https://..."
     },
     "purchasePrice": 105000,
@@ -2279,7 +2343,8 @@ Authorization: Bearer {accessToken}
     "totalAmount": 108000,
     "paymentDeadline": "2026-08-18T22:00:00+09:00",
     "serverTime": "2026-08-18T20:14:00+09:00",
-    "paidAt": "2026-08-18T20:13:00+09:00"
+    "paidAt": "2026-08-18T20:13:00+09:00",
+    "orderType": "WINNER"
   },
   "error": null
 }
@@ -2632,7 +2697,7 @@ Authorization: Bearer {accessToken}
 | — product | Object | 상품 요약 | O |
 | —— productId | Long | 상품 ID | O |
 | —— name | String | 상품명 | O |
-| —— subName | String | 영문 상품명 | O |
+| —— subName | String | 모델명(§1 "상품 표시명 규칙") | O |
 | —— imageUrl | String | 대표 이미지 | O |
 | — purchasePrice | Long | 구매 가능 금액 = 내 마지막 입찰가(`myLastBidAmount`) | O |
 | — shippingFee | Long | 배송비 | O |
@@ -2651,8 +2716,8 @@ Authorization: Bearer {accessToken}
     "status": "WAITING",
     "product": {
       "productId": 10,
-      "name": "아식스 노바블라스트 6 블랙 - 2E 와이드",
-      "subName": "Asics Novablast 6 Black - 2E Wide",
+      "name": "ASICS Novablast 6 Black",
+      "subName": "Novablast 6",
       "imageUrl": "https://..."
     },
     "purchasePrice": 100000,
@@ -2986,9 +3051,17 @@ Authorization: Bearer {accessToken}
 | —— brand | String | 브랜드 | O |
 | —— name | String | 상품명 | O |
 | —— thumbnailUrl | String | 썸네일 | O |
-| —— price | Long | 현재가 | O |
+| —— price | Long | **호환용 기존 필드.** 항상 `currentPrice`와 같은 값이다. 새 화면은 `currentPrice`를 쓴다 | O |
 | —— likeCount | Int | 관심 수 | O |
-| —— isLiked | Boolean | 내 관심 등록 여부 | O |
+| —— isLiked | Boolean | 내 관심 등록 여부(비로그인이면 `false`) | O |
+| —— status | String | 경매 상태. 후보가 `SCHEDULED`/`LIVE`로 제한되므로 둘 중 하나 (#141) | O |
+| —— grade | String | 상품 등급. §1 `product.grade`와 같은 값(저장된 `conditionGrade` 그대로, 변환 없음) (#141) | X |
+| —— startPrice | Long | 경매 시작가(`Auction.startPrice`). 판매자가 등록·재경매 때 정한 값이며, 시작 전 시작가 변경 API로 바뀔 수 있다 (#141) | O |
+| —— currentPrice | Long | 경매 현재가(`Auction.currentPrice`). 입찰 전에는 `startPrice`와 같고, 입찰이 들어오면 최고 입찰 반영가로 오른다 — §1 `currentPrice`와 같은 값 (#141) | O |
+
+선정 기준: 같은 브랜드의 다른 `SCHEDULED`/`LIVE` 경매, `endAt` 오름차순 → `id` 오름차순, 최대 4개.
+`name`은 §1 "상품 표시명 규칙"과 같다. `grade`는 등록 데이터가 null이면 null일 수 있다(현재 등록 API는
+`conditionGrade`를 필수로 받는다).
 
 #### 200 Ok
 
@@ -3001,11 +3074,15 @@ Authorization: Bearer {accessToken}
         "productId": 20,
         "auctionId": 30,
         "brand": "BAPE",
-        "name": "베이프 슬라이드 #1 블랙",
+        "name": "BAPE Bape Sta Black",
         "thumbnailUrl": "https://...",
         "price": 234000,
         "likeCount": 556,
-        "isLiked": false
+        "isLiked": false,
+        "status": "LIVE",
+        "grade": "A",
+        "startPrice": 200000,
+        "currentPrice": 234000
       }
     ]
   },

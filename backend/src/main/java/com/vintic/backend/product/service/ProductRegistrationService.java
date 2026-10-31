@@ -1,11 +1,15 @@
 package com.vintic.backend.product.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.vintic.backend.ai.vision.dto.VisionAnalysisResult;
 import com.vintic.backend.analyze.domain.ProductAnalysisSession;
 import com.vintic.backend.analyze.domain.ProductAnalysisSessionRepository;
 import com.vintic.backend.auction.domain.Auction;
 import com.vintic.backend.auction.repository.AuctionRepository;
 import com.vintic.backend.auction.service.AuctionSchedulePolicy;
 import com.vintic.backend.common.exception.AnalysisSessionNotFoundException;
+import com.vintic.backend.common.exception.InvalidImageException;
 import com.vintic.backend.common.exception.UserNotFoundException;
 import com.vintic.backend.common.util.BidIncrementPolicy;
 import com.vintic.backend.common.util.S3UrlPresigner;
@@ -18,6 +22,8 @@ import com.vintic.backend.product.repository.ProductRepository;
 import com.vintic.backend.recommendation.service.ProductVectorService;
 import com.vintic.backend.user.domain.User;
 import com.vintic.backend.user.repository.UserRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -39,6 +45,10 @@ import java.util.List;
 @Service
 public class ProductRegistrationService {
 
+    private static final Logger log = LoggerFactory.getLogger(ProductRegistrationService.class);
+    private static final int MIN_IMAGE_COUNT = 3;
+    private static final int MAX_IMAGE_COUNT = 4;
+
     private final ProductRepository productRepository;
     private final UserRepository userRepository;
     private final ProductVectorService productVectorService;
@@ -46,6 +56,7 @@ public class ProductRegistrationService {
     private final ProductAnalysisSessionRepository sessionRepository;
     private final Clock clock;
     private final S3UrlPresigner s3UrlPresigner;
+    private final ObjectMapper objectMapper;
 
     public ProductRegistrationService(
             ProductRepository productRepository,
@@ -54,7 +65,8 @@ public class ProductRegistrationService {
             AuctionRepository auctionRepository,
             ProductAnalysisSessionRepository sessionRepository,
             Clock clock,
-            S3UrlPresigner s3UrlPresigner
+            S3UrlPresigner s3UrlPresigner,
+            ObjectMapper objectMapper
     ) {
         this.productRepository = productRepository;
         this.userRepository = userRepository;
@@ -63,6 +75,7 @@ public class ProductRegistrationService {
         this.sessionRepository = sessionRepository;
         this.clock = clock;
         this.s3UrlPresigner = s3UrlPresigner;
+        this.objectMapper = objectMapper;
     }
 
     @Transactional
@@ -89,7 +102,7 @@ public class ProductRegistrationService {
 
         Product product = new Product(
                 seller,
-                request.imageUrls(),
+                resolveImageUrls(session),
                 request.brand(),
                 request.modelName(),
                 request.color(),
@@ -101,7 +114,8 @@ public class ProductRegistrationService {
                 request.priceRange(),
                 request.sellingPrice(),
                 request.reason(),
-                request.sellerDescription()
+                request.sellerDescription(),
+                resolveConditionDescription(session, request.conditionDescription())
         );
 
         Product savedProduct = productRepository.save(product);
@@ -120,6 +134,42 @@ public class ProductRegistrationService {
         Auction savedAuction = auctionRepository.save(auction);
 
         return ProductResponse.from(savedProduct, savedAuction, s3UrlPresigner);
+    }
+
+    // #141: 상품 이미지는 분석 세션에 서버가 저장해 둔 원본 URL로만 정한다. 세션 이미지는
+    // multipart 분석(S3UploaderService 업로드 결과)과 photoIds 분석(ProductPhoto.originalUrl,
+    // PhotoUsageCommitter가 소유권·미사용을 확인한 사진) 모두 서버가 직접 채운 서명 없는 URL이다.
+    // 요청 imageUrls는 어떤 경우에도 쓰지 않는다 - 클라이언트가 보낸 URL은 서명을 떼어도 그
+    // 객체가 이 판매자의 사진인지 확인할 방법이 없기 때문이다. 두 분석 경로 모두 큐 적재 전에
+    // markImageUploaded로 세션 이미지를 저장하므로, 세션 이미지가 비어 있는 것은 이미지 업로드
+    // 전(CREATED)이거나 업로드에 실패한(IMAGE_UPLOAD_FAILED) 세션뿐이다 - 둘 다 등록을 거절한다.
+    private List<String> resolveImageUrls(ProductAnalysisSession session) {
+        List<String> imageUrls = session.getImageUrls();
+        if (imageUrls.size() < MIN_IMAGE_COUNT || imageUrls.size() > MAX_IMAGE_COUNT) {
+            throw new InvalidImageException(
+                    "분석 세션에 저장된 상품 이미지는 최소 3개, 최대 4개여야 합니다. 현재 이미지 수: " + imageUrls.size()
+            );
+        }
+        return imageUrls;
+    }
+
+    // #141: 판매자가 수정한 상태 설명이 있으면 그 값을, 없으면(null/공백) 분석 세션의 Vision
+    // conditionDescription을 저장한다. 세션의 vision_result_json은 읽기만 하고 바꾸지 않는다.
+    // 분석 결과가 아직 없거나 읽지 못하면 null로 저장한다 - 상태 설명은 등록 필수값이 아니다.
+    private String resolveConditionDescription(ProductAnalysisSession session, String requested) {
+        if (requested != null && !requested.isBlank()) {
+            return requested;
+        }
+        String visionResultJson = session.getVisionResultJson();
+        if (visionResultJson == null) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(visionResultJson, VisionAnalysisResult.class).conditionDescription();
+        } catch (JsonProcessingException e) {
+            log.warn("분석 결과를 읽지 못해 상태 설명 없이 등록합니다. analysisId={}", session.getId(), e);
+            return null;
+        }
     }
 
     @Transactional(readOnly = true)

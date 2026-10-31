@@ -45,6 +45,7 @@ import com.vintic.backend.common.exception.PenaltyRestrictedException;
 import com.vintic.backend.common.exception.SellerCannotBidException;
 import com.vintic.backend.like.dto.LikeResponse;
 import com.vintic.backend.like.service.AuctionLikeService;
+import com.vintic.backend.order.domain.OrderStatus;
 import com.vintic.backend.order.service.AuctionForfeitService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -121,7 +122,7 @@ class AuctionControllerTest {
         AuctionDetailResponse response = new AuctionDetailResponse(
                 1L,
                 AuctionStatus.LIVE,
-                new AuctionDetailResponse.Product(10L, "Nike Dunk Low Panda", "Nike", "Dunk Low", "B", List.of("https://example.com/a.jpg")),
+                new AuctionDetailResponse.Product(10L, "Nike Dunk Low Panda", "Nike", "Dunk Low", "B", List.of("https://example.com/a.jpg"), "앞코 주름이 있습니다."),
                 new AuctionDetailResponse.Seller(100L, "seller", "https://example.com/p.jpg", 0),
                 "설명",
                 50000L, 105000L, 5000L, 110000L, 110000L,
@@ -143,6 +144,7 @@ class AuctionControllerTest {
                 .andExpect(jsonPath("$.data.product.subName").value("Dunk Low"))
                 .andExpect(jsonPath("$.data.product.grade").value("B"))
                 .andExpect(jsonPath("$.data.product.imageUrls[0]").value("https://example.com/a.jpg"))
+                .andExpect(jsonPath("$.data.product.conditionDescription").value("앞코 주름이 있습니다."))
                 .andExpect(jsonPath("$.data.seller.sellerId").value(100))
                 .andExpect(jsonPath("$.data.seller.nickname").value("seller"))
                 .andExpect(jsonPath("$.data.seller.completedSalesCount").value(0))
@@ -248,7 +250,8 @@ class AuctionControllerTest {
     @Test
     void Similar_조회_성공시_200과_비슷한_상품_목록을_반환한다() throws Exception {
         SimilarAuctionsResponse response = new SimilarAuctionsResponse(List.of(
-                new SimilarAuctionsResponse.Item(20L, 30L, "BAPE", "BAPE 베이프 슬라이드", "https://example.com/b.jpg", 234000L, 556, false)
+                new SimilarAuctionsResponse.Item(20L, 30L, "BAPE", "BAPE 베이프 슬라이드", "https://example.com/b.jpg", 234000L, 556, false,
+                        AuctionStatus.LIVE, "A", 200000L, 234000L)
         ));
         when(auctionQueryService.getSimilarAuctions(eq(1L), any())).thenReturn(response);
 
@@ -260,7 +263,11 @@ class AuctionControllerTest {
                 .andExpect(jsonPath("$.data.items[0].brand").value("BAPE"))
                 .andExpect(jsonPath("$.data.items[0].price").value(234000))
                 .andExpect(jsonPath("$.data.items[0].likeCount").value(556))
-                .andExpect(jsonPath("$.data.items[0].isLiked").value(false));
+                .andExpect(jsonPath("$.data.items[0].isLiked").value(false))
+                .andExpect(jsonPath("$.data.items[0].status").value("LIVE"))
+                .andExpect(jsonPath("$.data.items[0].grade").value("A"))
+                .andExpect(jsonPath("$.data.items[0].startPrice").value(200000))
+                .andExpect(jsonPath("$.data.items[0].currentPrice").value(234000));
     }
 
     @Test
@@ -453,7 +460,7 @@ class AuctionControllerTest {
                 "mma****", true, false, CannotBidReason.ALREADY_HIGHEST_BIDDER, null,
                 OffsetDateTime.now().plusHours(1), OffsetDateTime.now(),
                 0, 3,
-                AutoBidSettingStatus.ACTIVE, 120000L, 110000L
+                AutoBidSettingStatus.ACTIVE, 120000L, 110000L, 105000L
         );
         when(auctionQueryService.getLiveView(1L, 2L)).thenReturn(response);
 
@@ -469,7 +476,8 @@ class AuctionControllerTest {
                 .andExpect(jsonPath("$.data.cannotBidReason").value("ALREADY_HIGHEST_BIDDER"))
                 .andExpect(jsonPath("$.data.myAutoBidStatus").value("ACTIVE"))
                 .andExpect(jsonPath("$.data.myCap").value(120000))
-                .andExpect(jsonPath("$.data.minCapAmount").value(110000));
+                .andExpect(jsonPath("$.data.minCapAmount").value(110000))
+                .andExpect(jsonPath("$.data.myLastBidAmount").value(105000));
     }
 
     @Test
@@ -489,7 +497,7 @@ class AuctionControllerTest {
                 1L, AuctionResult.WON,
                 new AuctionResultResponse.Product(10L, "Nike Dunk Low Panda", "Dunk Low", "https://example.com/a.jpg"),
                 1, 105000L, 105000L, 3000L, 108000L,
-                now.plusHours(24), now, 50L, null, false
+                now.plusHours(24), now, 50L, null, false, OrderStatus.PAYMENT_PENDING
         );
         when(auctionResultQueryService.getResult(1L, 2L)).thenReturn(response);
 
@@ -500,7 +508,8 @@ class AuctionControllerTest {
                 .andExpect(jsonPath("$.data.rank").value(1))
                 .andExpect(jsonPath("$.data.finalPrice").value(105000))
                 .andExpect(jsonPath("$.data.orderId").value(50))
-                .andExpect(jsonPath("$.data.backupEligible").value(false));
+                .andExpect(jsonPath("$.data.backupEligible").value(false))
+                .andExpect(jsonPath("$.data.orderStatus").value("PAYMENT_PENDING"));
     }
 
     @Test
@@ -510,7 +519,7 @@ class AuctionControllerTest {
                 1L, AuctionResult.LOST,
                 new AuctionResultResponse.Product(10L, "Nike Dunk Low Panda", "Dunk Low", "https://example.com/a.jpg"),
                 2, 105000L, 100000L, null, null,
-                null, now, null, null, true
+                null, now, null, null, true, null
         );
         when(auctionResultQueryService.getResult(1L, 2L)).thenReturn(response);
 

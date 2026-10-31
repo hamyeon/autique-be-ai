@@ -214,6 +214,19 @@ images: (신발 이미지 파일 2)
 images: (신발 이미지 파일 3)
 ```
 
+### 업로드 파일 형식·크기 (실제 구현 기준, #141)
+
+`POST /api/products/analyze`(multipart `images`)와 `POST /api/products/photos`(`image`)에 공통으로 적용됩니다.
+
+| 항목 | 실제 동작 |
+| --- | --- |
+| 파일 1개 최대 크기 | **50MB** (`spring.servlet.multipart.max-file-size`) |
+| 요청 1건 전체 최대 크기 | **100MB** (`spring.servlet.multipart.max-request-size`) |
+| 허용 형식 | **서버가 형식(확장자·Content-Type)을 검사하지 않습니다.** 받은 파일을 그대로 S3 원본으로 저장하고, 요청의 Content-Type을 그대로 객체에 붙입니다. 프론트는 **JPEG 또는 PNG**로 보내 주세요 |
+| 분석용 사본 | 서버가 읽을 수 있는 이미지(JPEG·PNG 등)는 긴 변 기준으로 줄인 JPEG 사본을 따로 만들어 AI 분석에 씁니다. 읽지 못하는 형식(예: HEIC)은 사본 없이 원본으로 분석을 시도하며, 이때 AI 분석이 실패할 수 있습니다 |
+| 장수 (multipart 분석) | 요청 자체는 장수를 검사하지 않습니다(빈 파일은 건너뜀, 0장이면 `40002`). 단, **상품 등록은 세션 이미지 3~4장일 때만 가능**하므로 3~4장을 보내야 합니다 |
+| 크기 초과 시 | 크기 초과 전용 오류 코드는 없습니다. Spring의 업로드 크기 초과 예외가 공통 처리기로 가므로 `500`(`50001`)으로 응답될 것으로 보이며, **실제 응답은 확인하지 않았습니다** |
+
 ## Response ✔️
 
 ### Success ✅
@@ -325,6 +338,9 @@ Authorization: Bearer {accessToken}
 | `slot` | 텍스트 | `SIDE` \| `FRONT` \| `OUTSOLE` \| `DEFECT` 중 하나 |
 
 `DEFECT`는 판정을 생략합니다(`check`/`detectedView`/`message`가 모두 `null`로 내려갑니다).
+
+파일 형식·크기 제한은 위 `POST /api/products/analyze`의 "업로드 파일 형식·크기"와 같습니다(1장 최대 50MB,
+서버는 형식을 검사하지 않음 — JPEG/PNG 권장).
 
 ## Response ✔️
 
@@ -588,6 +604,12 @@ Vision 분석 과정에서 충분한 근거를 확인하지 못한 항목은 `nu
 
 `AWAITING_USER_CONFIRMATION` 상태가 반환되면 Vision 분석 단계의 폴링을 중단하고, 반환된 분석 결과를 사용자 확인/수정 화면에 표시합니다.
 
+**`warnings`·`needsUserConfirmation`·`null` 필드의 후속 처리(현재 동작).** 서버는 이 값들로 이후 요청을
+막지 않습니다 — 경고가 있어도 가격 계산·등록이 가능합니다. 근거 부족으로 `null`인 필드(브랜드·모델명·
+색상·사이즈)는 가격 계산과 등록에서 필수이므로 사용자가 채워야 하고, 비우면 `40001`입니다. `conditionGrade =
+UNKNOWN`은 그대로 보내도 되고 사용자가 고른 등급으로 바꿔 보내도 됩니다("상태 등급 정리" 참고). 사진 칸 판정
+(`POST /api/products/photos`의 `MISMATCH`/`UNKNOWN`)도 분석 요청을 막지 않는 안내용입니다.
+
 ---
 
 ### 응답 필드 설명
@@ -596,7 +618,7 @@ Vision 분석 과정에서 충분한 근거를 확인하지 못한 항목은 `nu
 | --- | --- | --- |
 | `analysisId` | `Long` | 분석 세션 ID |
 | `status` | `String` | 현재 분석 진행 상태 |
-| `imageUrls` | `String[]` | S3에 업로드된 이미지 URL 목록 |
+| `imageUrls` | `String[]` | 분석 세션 이미지의 **표시용 서명 URL**(조회마다 새로 서명, 6시간 유효). 상품 등록 요청에 다시 보낼 필요 없음 — 등록 시 서버가 세션의 원본 이미지를 직접 사용 |
 | `visionProgress` | 객체 | `VISION_PROCESSING` 중 끝난 단계 수 (`completedStages`, `totalStages`). 그 밖의 상태이거나 ①단계 전이면 `null` |
 | `preliminary` | 객체 | `VISION_PROCESSING` 중 잠정 결과 (`brand`, `modelName`, `color`, `size`). 최종 결과가 아니며 바뀔 수 있음. 그 밖의 상태이거나 ①단계 전이면 `null` |
 | `brand` | `String` | AI가 인식한 브랜드. 근거가 부족하면 `null` |
@@ -604,7 +626,7 @@ Vision 분석 과정에서 충분한 근거를 확인하지 못한 항목은 `nu
 | `color` | `String` | AI가 인식한 컬러웨이. 근거가 부족하면 `null` |
 | `size` | `Integer` | 한국 신발 사이즈(mm 단위, 예: `270`) |
 | `boxIncluded` | `Boolean` | 박스 포함 여부 |
-| `conditionDescription` | `String` | 상품 상태에 대한 AI 분석 요약 |
+| `conditionDescription` | `String` | 상품 상태에 대한 AI 분석 요약. 판매자가 고친 값을 상품 등록 요청의 `conditionDescription`에 담으면 그 값이, 생략하면 이 값이 상품에 저장됨(판매자 설명 `sellerDescription`과 별도 저장) |
 | `conditionGrade` | `String` | 상품 상태 등급: `DS` / `A` / `B` / `C` / `UNKNOWN`. `UNKNOWN`은 AI가 등급을 판단하지 못한 경우로, 사용자가 직접 선택해야 합니다 |
 | `defects` | 객체 배열 | 사진에서 발견된 하자 목록 (`type`, `location`, `severity`, `description`) |
 | `candidates` | 객체 배열 | 모델 인식 후보 목록 (`brand`, `modelName`, `color`, `confidence`) |
@@ -752,7 +774,13 @@ AWAITING_USER_CONFIRMATION
 
 가격 계산 요청은 Vision 분석이 완료되어 `AWAITING_USER_CONFIRMATION` 상태인 세션에서만 수행할 수 있습니다.
 
-또한 **가격 계산은 분석 세션당 1회만 요청할 수 있습니다.** 계산이 완료되면 세션 상태가 `COMPLETED`로 변경되므로, 같은 `analysisId`로 다시 요청하면 `400 Bad Request`(`40003`)가 반환됩니다.
+또한 **가격 계산은 분석 세션당 1회만 요청할 수 있습니다.** 계산이 완료되면 세션 상태가 `COMPLETED`로 변경되므로, 같은 `analysisId`로 다시 요청하면 `400 Bad Request`(`40003`)가 반환됩니다. 같은 입력으로 다시 보내도 멱등 처리되지 않고 똑같이 `40003`입니다(이전 계산 결과를 다시 돌려주는 기능은 없습니다).
+
+**가격 계산 후 입력값을 바꾸려는 경우의 현재 제약.**
+
+- 같은 `analysisId`로 재계산할 수 없습니다(`40003`). 가격 계산이 실패해 `PRICING_FAILED`가 된 세션도 다시 계산할 수 없습니다.
+- 새로 계산하려면 새 분석 세션이 필요합니다. 그런데 **사진 ID 방식에서는 한 번 분석에 쓰인 `photoId`를 다른 분석에 다시 쓸 수 없으므로**(`409` `40923`), 사진을 `POST /api/products/photos`로 다시 올린 뒤 새 `photoIds`로 분석을 요청해야 합니다. multipart 방식도 이미지를 다시 보내야 합니다.
+- 다만 `POST /api/products`는 가격 계산 결과와 요청 값이 같은지 대조하지 않습니다. 가격 계산 후 브랜드·등급 등을 화면에서 고쳐 등록 요청에 보내면 고친 값이 그대로 저장되고, `recommendedPrice`는 재계산되지 않습니다(재계산 허용 여부는 별도 결정 사항).
 
 ## 요청 필드 값 범위
 
@@ -768,6 +796,26 @@ AWAITING_USER_CONFIRMATION
   정상 동작하며, 기본 반영률이 적용됩니다.
 - **`S`는 Vision이 반환하지 않습니다.** Vision의 등급은 `DS` / `A` / `B` / `C` / `UNKNOWN`
   다섯 가지입니다. `S`는 사용자가 직접 등급을 선택하는 화면에서만 들어옵니다.
+
+### 상태 등급 정리 (API별 실제 범위·검증, #141)
+
+등급 정책을 새로 정한 것이 아니라 **현재 구현 그대로**를 정리한 것입니다.
+
+| API | 필드 | 실제로 오가는 값 | 서버 검증 |
+| --- | --- | --- | --- |
+| `GET /api/products/analyze/{taskId}` (분석 결과) | `conditionGrade` | `DS` / `A` / `B` / `C` / `UNKNOWN` (enum). 근거가 부족하면 서버가 `UNKNOWN`으로 낮춤. 분석 전/실패 시 `null` | 응답 값이므로 해당 없음 |
+| `POST /api/products/calculate-price` | `conditionGrade` | 문서상 허용 값 `DS` / `S` / `A` / `B` / `C` / `UNKNOWN` | **필수(`@NotBlank`)만 검사.** 값 범위는 검사하지 않는다. 앞뒤 공백 제거·대문자 변환 후 계산하며, 정의되지 않은 값(예: `X`)은 400이 아니라 "기타 상태"로 기본 반영률이 적용된다 |
+| `POST /api/products` (상품 등록) | `conditionGrade` | 클라이언트가 보낸 문자열 | **필수(`@NotBlank`)만 검사.** 값 범위·대소문자 변환 없이 그대로 저장한다. 가격 계산 때 보낸 등급과 같은지도 대조하지 않는다 |
+| `GET /api/auctions/{id}` | `product.grade` | 등록 때 저장된 문자열 그대로 | 변환 없음 — `DS`/`S`/`UNKNOWN`도 반환될 수 있다(A/B/C로 제한되지 않음) |
+| `GET /api/auctions/{id}/similar` | `items[].grade` | 위와 동일 | 변환 없음 |
+
+**알려진 제약(정책 미정).** 등록 API가 등급 값 범위를 검사하지 않으므로, 클라이언트가 문서상 허용 값
+(`DS`/`S`/`A`/`B`/`C`/`UNKNOWN`) 밖의 값을 보내면 그대로 저장·노출됩니다. 허용 등급 통일(S 유지 여부,
+UNKNOWN 등록 허용 여부)은 별도 결정 사항입니다.
+
+**분석 결과가 `UNKNOWN`일 때 사용자가 고른 등급 전달 방법.** 별도 필드는 없습니다. 사용자가 화면에서
+고른 등급을 `POST /api/products/calculate-price`와 `POST /api/products`의 `conditionGrade`에 **같은 값으로**
+넣어 보냅니다. 서버는 분석 결과의 `UNKNOWN`을 등록 시 강제하거나 덮어쓰지 않습니다.
 
 ---
 
@@ -946,6 +994,12 @@ API 요청 자체는 정상적으로 처리되었으므로 `200 OK`가 반환되
 
 이 경우에도 가격 계산 요청 자체는 완료된 것으로 처리되어 분석 세션 상태는 `COMPLETED`로 변경됩니다.
 
+**추천가 0원과 상품 등록의 관계.** 추천가가 `0`이어도 같은 세션으로 `POST /api/products`를 호출할 수
+있습니다(`recommendedPrice: 0`은 `@NotNull`만 검사하므로 허용). 단, 경매 시작가 `auctionStartPrice`는
+`@Positive`(0보다 커야 함)라 사용자가 직접 1원 이상을 입력해야 하며, 0이나 음수를 보내면 `400`
+`40001`("경매 시작가는 0보다 커야 합니다.")입니다. 추천가를 시작가로 자동 채우는 화면이라면 0원일 때
+입력을 요구해야 합니다.
+
 국내 시세(중고 실거래·KREAM)는 없고 eBay 매물만 있는 경우에도 추천가는 `0`이지만, `ebayAveragePrice`와 `ebayMatches`는 참고용으로 채워져 내려갑니다. 이때 `reason`은 다음과 같습니다.
 
 ```text
@@ -1082,6 +1136,23 @@ Vision 분석이 아직 진행 중인 경우뿐만 아니라, 이미 가격 계�
 취소할 수 있습니다(타인 `taskId`는 `404`). 이미 상품 등록에 사용된 세션은 취소할 수 없습니다. 같은 요청을
 다시 보내도 안전합니다(이미 `CANCELLED`면 그대로 반환).
 
+취소 가능 여부는 **분석 상태가 아니라 "상품 등록에 쓰였는지"로만** 판단합니다. `QUEUED`, `VISION_PROCESSING`,
+`AWAITING_USER_CONFIRMATION`, `PRICING_PROCESSING`, `COMPLETED`, `*_FAILED` 모두 등록 전이면 취소됩니다.
+취소하면 분석·가격 결과가 지워지고, 이후 이 세션으로 가격 계산(`40003`)이나 상품 등록(`40003`)을 할 수
+없습니다. 취소와 등록이 동시에 들어오면 세션 행 잠금으로 먼저 커밋된 쪽만 성공합니다.
+
+> 취소해도 사진 ID 방식에서 이 분석에 쓰인 `photoId`는 "사용됨" 상태로 남습니다. 다시 분석하려면 사진을
+> 새로 올려야 합니다(`40923`).
+
+### Request
+
+```http
+POST /api/products/analyze/1/cancel
+Authorization: Bearer {accessToken}
+```
+
+요청 본문 없음.
+
 ### Response — 200 OK
 
 | 필드 | 타입 | 설명 |
@@ -1093,10 +1164,38 @@ Vision 분석이 아직 진행 중인 경우뿐만 아니라, 이미 가격 계�
 { "success": true, "data": { "id": 1, "status": "CANCELLED" }, "error": null }
 ```
 
+이미 `CANCELLED`인 세션을 다시 취소해도 **같은 200 응답**이 반환됩니다(멱등). 등록에 쓰인 세션인지는
+멱등 판정보다 늦게 보므로, 취소된 세션은 항상 200입니다.
+
 ### Failure
 
-- `404` `40408` — 존재하지 않거나 본인 소유가 아닌 분석 세션
-- `400` `40003` — 이미 등록에 사용됐거나 취소할 수 없는 상태의 세션
+| HTTP | code | 발생 조건 |
+| --- | --- | --- |
+| `404` | `40408` | `taskId`에 해당하는 세션이 없거나, 다른 사용자의 세션(둘을 구분하지 않음) |
+| `400` | `40003` | 이미 `POST /api/products`에 사용된(등록 확정된) 세션 |
+| `401` | `40101` | 미인증 |
+
+```json
+{
+  "success": false,
+  "data": null,
+  "error": {
+    "code": 40408,
+    "message": "분석 세션을 찾을 수 없습니다. analysisId: 999"
+  }
+}
+```
+
+```json
+{
+  "success": false,
+  "data": null,
+  "error": {
+    "code": 40003,
+    "message": "이미 상품 등록에 사용된 분석 세션은 취소할 수 없습니다. 현재 상태: COMPLETED"
+  }
+}
+```
 
 ---
 
@@ -1111,30 +1210,140 @@ AI 분석·가격 계산을 마친 세션(`analysisId`)을 확정해 **상품과
 > **성공 응답은 `200 OK`입니다** (리소스를 생성하지만 현재 구현은 `201`이 아닌 `200`을 반환합니다 —
 > 계약상 `201`이 바람직한지는 `docs/api/auction-audit.md`의 차이 항목 참고).
 
-### Request Body (주요 필드)
+### 상품 이미지 결정 규칙 (#141)
 
-| 필드 | 타입 | 필수 | 검증/비고 |
-| --- | --- | --- | --- |
-| `analysisId` | `Long` | O | `@NotNull`. `COMPLETED`(또는 확인 완료) 상태의 본인 세션 |
-| `imageUrls` | `Array<String>` | O | `@Size(min=3, max=4)`, 각 항목 `@NotBlank` |
-| `brand` / `modelName` / `color` / `conditionGrade` / `componentStatus` | `String` | O | `@NotBlank` |
-| `size` / `recommendedPrice` / `sellingPrice` | `Integer` | O | `@NotNull` |
-| `auctionStartPrice` | `Long` | O | `@NotNull @Positive` |
-| `auctionStartAt` / `auctionEndAt` | `String`(ISO-8601) | O | `@NotNull`, 서버 시간 정책 검증 |
-| `baseMarketPrice` / `priceRange` / `reason` / `sellerDescription` | — | X | 선택 |
+상품 이미지는 **`analysisId`로 연결된 분석 세션에 서버가 저장해 둔 이미지로만** 정합니다. 요청
+`imageUrls`는 어떤 경우에도 저장되지 않습니다.
+
+| 분석 세션 상태 | 저장되는 상품 이미지 | 결과 |
+| --- | --- | --- |
+| 세션 이미지 3~4장 (사진 ID 분석·multipart 분석으로 만든 정상 세션) | 세션 이미지(사진 ID 방식이면 그 분석에 사용 처리된 `photoId`들의 원본, `SIDE`→`FRONT`→`OUTSOLE`→`DEFECT` 순. multipart면 업로드 순) | 등록 성공. 요청 `imageUrls`는 생략 가능하고, 보내도 무시됩니다(형식 검증 `@Size`만 적용) |
+| 세션 이미지 0장 (이미지 업로드 전 `CREATED` 세션, 업로드 실패 `IMAGE_UPLOAD_FAILED` 세션) 또는 3장 미만·4장 초과 | — | **`400` `40002`로 거절.** 요청에 `imageUrls`를 보내도 대신 쓰지 않습니다 |
+
+> **#141 변경.** 이전에는 세션 이미지가 없을 때 요청 `imageUrls`(서명 제거)를 대신 저장했지만 제거했습니다.
+> 서명을 뗀 URL이라도 그 객체가 이 판매자의 사진인지 확인할 수 없기 때문입니다. 정상 분석 경로(사진 ID,
+> multipart)는 둘 다 큐 적재 전에 세션 이미지를 저장하므로 이 변경으로 막히는 정상 흐름은 없습니다.
+
+- 세션 이미지는 서명 없는 S3 원본 경로(`https://<bucket>.s3.<region>.amazonaws.com/<key>`)로 저장돼
+  있어 만료되지 않습니다. 분석 조회(`GET /api/products/analyze/{taskId}`)가 주는 **6시간짜리 서명 URL은
+  화면 표시용**이며, 이를 등록 요청에 다시 보낼 필요가 없습니다. 보내더라도 저장되지 않습니다.
+- 상품 이미지는 조회 API(상품 등록 응답·경매 상세 등)에서 요청마다 새로 24시간짜리 서명 URL로 바뀌어
+  나갑니다. 상품 등록 응답의 `imageUrls`도 서명 URL입니다.
+- 실제로 저장될 이미지가 3장 미만이거나 4장 초과면 등록이 거절됩니다(`400` `40002`). 이때 상품·경매는
+  저장되지 않고 세션의 등록 확정도 롤백됩니다.
+- 사진 소유권·중복·필수 칸 검증은 분석 요청(`POST /api/products/analyze`, photoIds) 시점에 이미 끝납니다.
+  등록 시에는 **세션 소유권**(본인 세션이 아니면 `40408`)만 다시 확인하므로, 다른 사용자의 사진으로 상품을
+  만들 수 없습니다.
+
+### 사진 ID 방식 전체 흐름 예시
+
+```http
+POST /api/products/photos            (multipart: image, slot=SIDE)    → { "photoId": 123, ... }
+POST /api/products/photos            (multipart: image, slot=FRONT)   → { "photoId": 124, ... }
+POST /api/products/photos            (multipart: image, slot=OUTSOLE) → { "photoId": 125, ... }
+
+POST /api/products/analyze           { "photoIds": [123, 124, 125] }  → 202 { "analysisId": 1, "status": "QUEUED" }
+GET  /api/products/analyze/1         (status가 AWAITING_USER_CONFIRMATION이 될 때까지 폴링)
+POST /api/products/calculate-price   { "analysisId": 1, "brand": "Nike", ..., "conditionGrade": "B", "componentStatus": "FULL" }
+POST /api/products                   (아래 본문 — imageUrls 없음)
+```
+
+```json
+{
+  "analysisId": 1,
+  "brand": "Nike",
+  "modelName": "Dunk Low",
+  "color": "Panda",
+  "size": 270,
+  "conditionGrade": "B",
+  "componentStatus": "FULL",
+  "recommendedPrice": 40000,
+  "baseMarketPrice": 40000,
+  "priceRange": "25,000원 ~ 81,000원",
+  "sellingPrice": 45000,
+  "reason": "당근마켓·후르츠패밀리에 올라온 ...",
+  "sellerDescription": "실착 3회, 박스 포함입니다.",
+  "conditionDescription": "토박스에 얕은 주름이 있습니다.",
+  "auctionStartPrice": 30000,
+  "auctionStartAt": "2026-10-27T20:00:00+09:00",
+  "auctionEndAt": "2026-10-27T22:00:00+09:00"
+}
+```
+
+**기존 URL(multipart) 방식과의 차이.** multipart `POST /api/products/analyze`(`images`)로 만든 세션도
+서버가 업로드한 원본 URL을 세션에 저장하므로 **같은 규칙**이 적용됩니다 — `imageUrls`를 생략할 수 있고,
+보내도 세션 이미지가 저장됩니다. 기존처럼 `imageUrls`를 보내는 클라이언트도 그대로 동작합니다(값만 무시됨).
+
+### 상태 설명(`conditionDescription`) 규칙 (#141)
+
+상품에는 두 가지 설명이 **서로 다른 컬럼**에 저장됩니다.
+
+| 요청 필드 | 저장 위치 | 경매 상세(auction-spec §1) 응답 |
+| --- | --- | --- |
+| `sellerDescription` | `products.description` (판매자 설명) | `description` |
+| `conditionDescription` | `products.condition_description` (상품 상태 설명) | `product.conditionDescription` |
+
+- `conditionDescription`을 보내면(공백 아닌 문자열) **그 값을 그대로** 저장합니다. 판매자가 AI 상태 설명을
+  고친 값을 담는 용도입니다. 최대 1000자(`40001`).
+- **생략하거나 `null`·공백뿐이면** 이 세션의 분석 결과 `conditionDescription`(`GET /api/products/analyze/{taskId}`
+  응답과 같은 값)을 저장합니다. 분석 결과가 아직 없거나(Vision 완료 전) 그 값이 `null`이면 `null`로 저장됩니다.
+- 분석 세션의 원본 분석 결과는 바뀌지 않습니다. 두 설명은 서로 섞이지 않습니다 — `sellerDescription`을 생략해도
+  상태 설명이 `description`으로 들어가지 않습니다.
+- 이 필드가 생기기 전에 등록된 상품은 `conditionDescription`이 `null`입니다(소급해 채우지 않음).
+
+### Request Body
+
+| 필드 | 타입 | 필수 | nullable | 검증/비고 |
+| --- | --- | --- | --- | --- |
+| `analysisId` | `Long` | O | X | `@NotNull`. 본인 소유이고, 취소되지 않았고, 아직 등록에 쓰이지 않은 세션 |
+| `imageUrls` | `Array<String>` | X | O | 보내면 `@Size(min=3, max=4)`, 각 항목 `@NotBlank`. 위 "상품 이미지 결정 규칙" 참고 |
+| `brand` / `modelName` / `color` / `conditionGrade` / `componentStatus` | `String` | O | X | `@NotBlank`. 값 범위는 검사하지 않음(등급은 "상태 등급 정리" 참고) |
+| `size` / `recommendedPrice` / `sellingPrice` | `Integer` | O | X | `@NotNull`(`recommendedPrice: 0` 허용) |
+| `auctionStartPrice` | `Long` | O | X | `@NotNull @Positive` |
+| `auctionStartAt` / `auctionEndAt` | `String`(ISO-8601 offset) | O | X | `@NotNull`, 시작은 현재 이후·진행시간 1시간 이상(`40006`) |
+| `baseMarketPrice` / `priceRange` / `reason` / `sellerDescription` | — | X | O | 선택. `sellerDescription`이 상품 상세의 `description`이 됨 |
+| `conditionDescription` | `String` | X | O | 선택, `@Size(max=1000)`. 생략·`null`·공백이면 분석 결과의 상태 설명 사용. 위 "상태 설명 규칙" 참고 |
+
+> **현재 구현의 제약(정책 미정, 변경하지 않음).** 등록 시 세션의 분석 상태는 검사하지 않습니다 —
+> `COMPLETED`(가격 계산 완료)가 아닌 세션으로도 등록됩니다. 요청의 가격·등급이 가격 계산 결과와 같은지도
+> 대조하지 않습니다. 이전 문서의 "`COMPLETED` 상태의 본인 세션" 표기는 실제 구현과 달라 정정했습니다.
 
 ### Response — 200 OK
 
 상품 정보와 함께 **생성된 첫 경매 요약**(`auctionId`, `auctionStatus`, `auctionStartPrice`,
-`bidIncrement`, `auctionStartAt`, `auctionEndAt`)을 반환합니다. 경매 상세 조회는 `GET /api/auctions/{auctionId}`
+`bidIncrement`, `auctionStartAt`, `auctionEndAt`)을 반환합니다. `imageUrls`는 위 규칙으로 결정된 상품
+이미지를 24시간 서명 URL로 바꾼 값입니다. 경매 상세 조회는 `GET /api/auctions/{auctionId}`
 (auction-spec §1)로 이어집니다.
 
 ### Failure
 
-- `400` `40001` — 요청 본문 검증 실패(필수값/범위)
-- `401` `40101` — 미인증
-- `404` `40408` — 존재하지 않거나 본인 소유가 아닌 분석 세션
-- `400` `40003` — 등록할 수 없는 분석 상태(이미 등록됨 등)
+| HTTP | code | 발생 조건 |
+| --- | --- | --- |
+| `400` | `40001` | 요청 본문 검증 실패(필수값 누락, `imageUrls`를 보냈는데 3~4개가 아님, `conditionDescription` 1000자 초과, `auctionStartPrice` ≤ 0 등). 메시지는 첫 번째 위반 항목 |
+| `400` | `40002` | 분석 세션에 저장된 이미지가 3~4장이 아님(이미지 업로드 전·업로드 실패 세션 등). 요청 `imageUrls`를 보내도 같은 오류 |
+| `400` | `40003` | 취소된 세션(`취소된 분석 세션은 상품 등록에 사용할 수 없습니다...`) 또는 이미 등록에 쓰인 세션(`이미 다른 상품 등록에 사용된 분석 세션입니다.`) |
+| `400` | `40006` | 경매 시작/종료 시각 정책 위반 |
+| `401` | `40101` | 미인증 |
+| `404` | `40408` | 존재하지 않거나 본인 소유가 아닌 분석 세션 |
+
+모든 실패에서 상품·경매는 저장되지 않고 세션의 등록 확정도 롤백됩니다(같은 트랜잭션).
+
+```json
+{
+  "success": false,
+  "data": null,
+  "error": {
+    "code": 40002,
+    "message": "분석 세션에 저장된 상품 이미지는 최소 3개, 최대 4개여야 합니다. 현재 이미지 수: 0"
+  }
+}
+```
+
+> **실서버 500 보고에 대해.** 이전에는 요청 `imageUrls`를 그대로 `product_image_urls.image_url`
+> (`VARCHAR(1000)`)에 저장했으므로, 분석 조회의 서명 URL(배포 환경은 IAM 역할 서명이라
+> `X-Amz-Security-Token`이 포함되어 길어질 수 있음)을 보내면 길이 초과로 catch-all `500`/`50001`이 날 수
+> 있었습니다. 이 가설은 **실서버 로그로 확인되지 않았습니다.** 이번 변경으로 서명 URL은 저장 경로에
+> 들어가지 않습니다.
 
 ---
 
@@ -1146,19 +1355,19 @@ AI 분석·가격 계산을 마친 세션(`analysisId`)을 확정해 **상품과
 
 | 엔드포인트 | 설명 | 상세 |
 | --- | --- | --- |
-| `GET /api/auctions/{auctionId}` | 경매 상세(product/seller/myState 중첩, AI 추정가, 내 참여 상태) | auction-spec §1 |
-| `GET /api/auctions/{auctionId}/live` | 실시간 경매 상태(가벼운 polling) | auction-spec §2 |
+| `GET /api/auctions/{auctionId}` | 경매 상세(product/seller/myState 중첩, AI 추정가, 내 참여 상태. #141: `product.conditionDescription` 추가) | auction-spec §1 |
+| `GET /api/auctions/{auctionId}/live` | 실시간 경매 상태(가벼운 polling. #141: 내 마지막 입찰 금액 `myLastBidAmount` 추가) | auction-spec §2 |
 | `GET /api/auctions/{auctionId}/bids` | 입찰 내역(page/size/order 페이지네이션) | auction-spec §3 |
 | `GET /api/auctions/{auctionId}/auto-bid/recommendation` | AI 자동입찰 추천 | auction-spec §4 |
 | `POST /api/auctions/{auctionId}/auto-bids` | 자동입찰 등록(Idempotency-Key) | auction-spec §5 |
 | `GET/PATCH/DELETE /api/auctions/{auctionId}/auto-bids/me` | 내 자동입찰 조회/수정/중단 | auction-spec §6–8 |
 | `POST /api/auctions/{auctionId}/bids` | 직접 입찰(Idempotency-Key) | auction-spec §9 |
-| `GET /api/auctions/{auctionId}/result` | 경매 결과 | auction-spec §10 |
+| `GET /api/auctions/{auctionId}/result` | 경매 결과(#141: 본인 주문 상태 `orderStatus` 추가, 없으면 null) | auction-spec §10 |
 | `POST /api/auctions/{auctionId}/award/forfeit` | 낙찰 포기 | auction-spec §11 |
-| `GET /api/orders/{id}`, `POST /api/orders/{id}/pay` | 주문 조회·Mock 결제 | auction-spec §12–13 |
+| `GET /api/orders/{id}`, `POST /api/orders/{id}/pay` | 주문 조회·Mock 결제(#141: 주문 유형 `orderType` 추가) | auction-spec §12–13 |
 | `GET /api/me/penalties` | 내 페널티 | auction-spec §14 |
 | `GET/POST /api/backup-offers/...` | 차순위 제안 조회/수락/거절 | auction-spec §15–17 |
-| `GET /api/auctions/{auctionId}/similar` | 비슷한 상품 | auction-spec §18 |
+| `GET /api/auctions/{auctionId}/similar` | 비슷한 상품(#141: 경매 `status`·상품 `grade`·`startPrice`·`currentPrice` 추가) | auction-spec §18 |
 | `POST/DELETE /api/auctions/{auctionId}/likes` | 관심 등록/해제 | auction-spec §19–20 |
 | `POST /{id}/cancel`, `PATCH /{id}/start-price`, `POST /{id}/relist` | 경매 취소·시작가 수정·재경매(판매자용, freeze 이후 추가) | auction-spec §경매 관리 API |
 

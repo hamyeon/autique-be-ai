@@ -19,6 +19,7 @@ import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -83,7 +84,7 @@ class ProductControllerTest {
                 1L,
                 List.of("https://example.com/a.jpg", "https://example.com/b.jpg", "https://example.com/c.jpg"),
                 "Nike", "Dunk Low", "Panda", 270, "B", "PARTIAL",
-                300000, 350000, "285,000원 ~ 315,000원", 290000, "사유", "설명",
+                300000, 350000, "285,000원 ~ 315,000원", 290000, "사유", "설명", null,
                 10000L, startAt, endAt
         );
         ProductResponse response = new ProductResponse(
@@ -104,5 +105,73 @@ class ProductControllerTest {
                 .andExpect(jsonPath("$.data.sellerId").value(1));
 
         verify(productRegistrationService).createProduct(any(), eq(1L));
+    }
+
+    @Test
+    void 상품_등록_요청에서_imageUrls를_생략해도_검증을_통과한다() throws Exception {
+        // #141: 이미지는 분석 세션 기준으로 서버가 정한다 - 요청 본문에 imageUrls 키 자체가 없어도 400이 아니다.
+        OffsetDateTime startAt = OffsetDateTime.now().plusHours(2);
+        OffsetDateTime endAt = startAt.plusHours(1);
+        String body = """
+                {
+                  "analysisId": 1,
+                  "brand": "Nike", "modelName": "Dunk Low", "color": "Panda", "size": 270,
+                  "conditionGrade": "B", "componentStatus": "PARTIAL",
+                  "recommendedPrice": 300000, "sellingPrice": 290000,
+                  "auctionStartPrice": 10000,
+                  "auctionStartAt": "%s", "auctionEndAt": "%s"
+                }
+                """.formatted(startAt, endAt);
+        ProductResponse response = new ProductResponse(
+                1L, 1L, List.of("https://example.com/a.jpg"), "Nike", "Dunk Low", "Panda",
+                270, "B", "PARTIAL", 300000, null, null, 290000, null, null, null,
+                100L, "SCHEDULED", 10000L, 5000L, startAt, endAt
+        );
+        when(productRegistrationService.createProduct(any(), eq(1L))).thenReturn(response);
+
+        mockMvc.perform(post("/api/products")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body)
+                        .requestAttr("currentUserId", 1L))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true));
+    }
+
+    @Test
+    void 상품_등록_요청의_imageUrls가_3개_미만이면_400을_반환한다() throws Exception {
+        OffsetDateTime startAt = OffsetDateTime.now().plusHours(2);
+        CreateProductRequest request = new CreateProductRequest(
+                1L, List.of("https://example.com/a.jpg"),
+                "Nike", "Dunk Low", "Panda", 270, "B", "PARTIAL",
+                300000, null, null, 290000, null, null, null,
+                10000L, startAt, startAt.plusHours(1)
+        );
+
+        mockMvc.perform(post("/api/products")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request))
+                        .requestAttr("currentUserId", 1L))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value(40001));
+    }
+
+    @Test
+    void 상품_등록_요청의_상태_설명이_1000자를_넘으면_400을_반환한다() throws Exception {
+        OffsetDateTime startAt = OffsetDateTime.now().plusHours(2);
+        CreateProductRequest request = new CreateProductRequest(
+                1L, null,
+                "Nike", "Dunk Low", "Panda", 270, "B", "PARTIAL",
+                300000, null, null, 290000, null, null, "가".repeat(1001),
+                10000L, startAt, startAt.plusHours(1)
+        );
+
+        mockMvc.perform(post("/api/products")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request))
+                        .requestAttr("currentUserId", 1L))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value(40001));
+
+        verify(productRegistrationService, never()).createProduct(any(), any());
     }
 }

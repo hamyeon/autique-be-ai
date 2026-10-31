@@ -8,10 +8,15 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.util.List;
+import java.util.Optional;
 
 public interface BidRepository extends JpaRepository<Bid, Long> {
 
     long countByAuctionId(Long auctionId);
+
+    // #141: GET /live의 myLastBidAmount. 한 사용자의 Bid 금액은 시간 순으로 증가하므로(아래
+    // findLatestBidPerUserOrderedByRank 주석) 가장 최근 Bid(id 최대)가 곧 마지막 입찰 금액이다.
+    Optional<Bid> findFirstByAuctionIdAndUserIdOrderByIdDesc(Long auctionId, Long userId);
 
     // #55: bidderMasked(NicknameMasker)가 각 Bid의 user.nickname을 필요로 한다 - user가
     // LAZY라 fetch join 없이 페이지를 순회하면 페이지 크기만큼 SELECT가 반복된다(N+1). join fetch는

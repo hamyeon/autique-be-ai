@@ -41,7 +41,10 @@ public record AuctionDetailResponse(
             String brand,
             String subName,
             String grade,
-            List<String> imageUrls
+            List<String> imageUrls,
+            // #141: 상품 상태 설명(Product.conditionDescription). 판매자 설명(상위 description)과 별개다.
+            // 이 값이 저장되기 전에 등록된 상품은 null이다.
+            String conditionDescription
     ) {
     }
 
