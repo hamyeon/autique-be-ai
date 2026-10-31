@@ -79,8 +79,9 @@ Base URL : https://<api-공인IP-하이픈>.sslip.io
 | `GET /api/orders/{id}` · `POST /api/orders/{id}/pay` (주문 조회·결제) | 주문 소유자(아니면 `40304`) |
 | `GET /api/backup-offers/{id}` · `POST .../accept` · `POST .../decline` (차순위) | 제안 candidate 본인(아니면 `40305`). accept는 Idempotency-Key |
 | `GET /api/me/penalties` (내 페널티) | 본인 |
+| `GET /api/me` (내 정보) · `GET /api/me/auctions` (나의 경매 — 내가 참여한 경매) · `GET /api/me/likes` (관심 목록) (#143) | 본인 데이터만(다른 사용자 지정 불가) |
 | `POST /api/products/analyze` · `POST /api/products/photos` · `GET /api/products/analyze/{taskId}` · `POST /api/products/analyze/{taskId}/cancel` · `POST /api/products/calculate-price` · `POST /api/products` (상품 등록) | 분석 세션 소유자(타인 조회/취소는 `404`) |
-| `POST /api/purchase-goals/parse` · `POST` · `GET` · `GET /{id}` · `GET /{id}/matches` · `DELETE /{id}` `/api/purchase-goals` (구매 목표) | 목표 소유자(아니면 `40306`/`40406`) |
+| `POST /api/purchase-goals/parse` · `POST` · `GET` · `GET /{id}` · `GET /{id}/matches` · `DELETE /{id}` `/api/purchase-goals` (구매 목표) | 목표 소유자. `{id}`가 없으면 `404`/`40406`, 다른 사용자 목표면 `403`/`40306`(상세·평가 이력·취소 공통). 상세는 "# 구매 목표(Purchase Agent) API" 절 |
 | `GET /api/notifications` · `PATCH /api/notifications/{id}/read` · `GET /api/notifications/unread-count` (알림) | 본인 알림(아니면 `40405`) |
 
 ### 인증 선택 (비로그인 허용 · 로그인하면 개인화/로그)
@@ -1577,9 +1578,9 @@ Authorization: Bearer {accessToken}
 
 Purchase Agent(#95)의 첫 단계입니다. 사용자가 자유롭게 쓴 구매 목표 문장을 구조화된 **초안(GoalDraft)** 으로 바꿔 돌려줍니다.
 
-- **DB에 아무것도 저장하지 않습니다.** 응답은 초안이고, 사용자가 확인 화면에서 고친 값을 `POST /api/purchase-goals`(백엔드 담당, 별도 명세 예정)로 보내야 Goal이 등록됩니다.
+- **DB에 아무것도 저장하지 않습니다.** 응답은 초안이고, 사용자가 확인 화면에서 고친 값을 `POST /api/purchase-goals`(아래 "# 구매 목표(Purchase Agent) API" 절)로 보내야 Goal이 등록됩니다. 초안에는 `deadline`이 없으므로 확인 화면에서 사용자가 직접 입력합니다.
 - AI 해석에 실패하면 500이 아니라 **규칙 기반 초안**을 `warnings` 첫 줄에 안내를 붙여 돌려줍니다. 그래도 실패하면(50003) 프론트는 빈 폼으로 전환해 사용자가 직접 입력하게 해 주세요. 파싱 실패가 등록을 막으면 안 됩니다.
-- 인증이 필요합니다(`X-User-Id`). 유료 LLM 호출이라 익명에 열지 않습니다.
+- 인증이 필요합니다(dev/prod `Authorization: Bearer`, local mock `X-User-Id`). 유료 LLM 호출이라 익명에 열지 않습니다.
 
 ## Request ✔️
 
@@ -1656,6 +1657,349 @@ X-User-Id: {userId}
 | --- | --- | --- |
 | 400 | 40001 | `text`가 비었거나 300자 초과 |
 | 500 | 50003 | AI 호출 실패 + 규칙 기반 fallback도 실패(정상이라면 발생하지 않음) |
+
+---
+
+# 구매 목표(Purchase Agent) API — 등록·조회·취소 (#143 명세)
+
+`POST /api/purchase-goals` · `GET /api/purchase-goals` · `GET /api/purchase-goals/{id}` ·
+`GET /api/purchase-goals/{id}/matches` · `DELETE /api/purchase-goals/{id}`
+
+위 `POST /api/purchase-goals/parse`로 받은 초안을 사용자가 확인·수정한 뒤 등록하고, 이후 진행 상태를 조회하는 API입니다.
+**등록 이후에는 사용자 추가 승인 없이** 서버 스캔이 조건에 맞는 경매를 찾아 자동입찰을 걸고, 결과를 반영합니다
+(후보 승인 대기 상태·승인 API는 없습니다).
+
+- **인증: 5개 모두 로그인 필수.** 사용자는 인증 정보(dev/prod `Authorization: Bearer`, local mock `X-User-Id`)로만 식별합니다.
+  요청 본문·경로에 사용자 ID를 넣는 필드는 없습니다.
+- **본인 목표만.** `{id}`가 존재하지 않으면 `404`(`40406`), 존재하지만 다른 사용자의 목표면 `403`(`40306`)입니다
+  (상세·평가 이력·취소 모두 같은 순서로 검사). 목록은 본인 목표만 나옵니다.
+- 시각은 모두 `+09:00` 오프셋 ISO-8601(`2026-11-07T23:59:00+09:00`)입니다.
+
+## 목표 상태(`status`)
+
+| 상태 | 의미 | 들어가는 경우 |
+| --- | --- | --- |
+| `ACTIVE` | 조건에 맞는 경매를 찾는 중 | 등록 직후 / 참여 경매에서 **패배하거나 경매가 취소됐고 마감 전**이면 다시 `ACTIVE` |
+| `ENGAGED` | 한 경매에 자동입찰을 걸고 결과를 기다리는 중 (`currentAuctionId`) | 스캔이 후보를 골라 자동입찰을 등록했을 때 |
+| `CANCEL_REQUESTED` | 참여 중에 취소를 요청함 — **진행 중인 경매의 결과는 기다린다** | `ENGAGED`에서 `DELETE` |
+| `FULFILLED` | **낙찰 완료**(결제 완료가 아님). 참여 경매에서 본인 주문(Order)이 생김 | `ENGAGED`·`CANCEL_REQUESTED` 중 참여 경매 낙찰 |
+| `CANCELLED` | 취소로 끝남 | `ACTIVE`에서 `DELETE` / `CANCEL_REQUESTED`에서 참여 경매 패배·취소 |
+| `EXPIRED` | 마감(`deadline`)까지 낙찰하지 못해 끝남 | `ACTIVE`인데 마감이 지남 / `ENGAGED`에서 참여 경매 패배·취소 시점에 이미 마감이 지남 |
+
+- 패배했다고 항상 `ACTIVE`나 항상 `EXPIRED`가 되는 것은 아닙니다 — **결과 반영 시점에 마감 전이면 `ACTIVE`(재탐색), 지났으면 `EXPIRED`**,
+  취소를 요청해 둔 상태(`CANCEL_REQUESTED`)였다면 `CANCELLED`입니다.
+- 참여 중인 경매는 마감이 지나도 결과가 나올 때까지 `ENGAGED`로 기다립니다(마감 처리 대상은 `ACTIVE`뿐).
+- `FULFILLED`·`CANCELLED`·`EXPIRED`는 끝난 상태이며 다시 바뀌지 않습니다.
+- **취소의 의미:** `DELETE`는 앞으로의 탐색을 멈추는 요청입니다. 이미 걸린 자동입찰을 **철회하지 않습니다** — 참여 중인
+  경매는 그대로 진행되고, 거기서 낙찰하면 `FULFILLED`가 됩니다.
+- 상태 전이(만료 → 결과 반영 → 탐색·참여)는 서버 스캔이 **5분마다**(`purchase-agent.scan.cron`, 기본 `0 */5 * * * *`) 처리합니다.
+  스캔은 `purchase-agent.scan.enabled=true`(환경변수 `PURCHASE_AGENT_SCAN_ENABLED`)일 때만 돕니다 — **기본값은 `false`**이고,
+  Worker 프로필은 항상 꺼져 있습니다. 꺼져 있으면 목표는 등록·조회·취소만 되고 상태가 자동으로 바뀌지 않습니다.
+  저장소의 배포 설정 파일에는 이 값을 켜는 설정이 없습니다(실제 서버 환경변수로 켰는지는 별도 확인 필요).
+
+### 자동 탐색·참여 규칙 (서버 동작, 요약)
+
+- 후보: `LIVE`(종료 전) 경매, 그리고 **24시간 안에 시작하는** `SCHEDULED` 경매. 이미 본인 자동입찰이 걸린 경매는 제외.
+- 필터: `modelKey`가 있으면 그 모델만, 없으면 `brand`가 있을 때 브랜드 일치로 거릅니다. 상품 등급이 `minCondition` 이상
+  (`DS > S > A > B > C`, 등급을 알 수 없는 매물은 제외), `sizeKr`가 있으면 같은 사이즈만, 예산이 그 경매의 최소 다음 입찰가 이상,
+  서버 시세를 계산할 수 있는 매물만 남깁니다. 남은 후보는 매물 판정(AI 또는 규칙 기반)을 거칩니다.
+- 자동입찰 상한(cap) = `min(hardMaxAmount, 서버 시세 × 1.0)`. 이 값이 최소 다음 입찰가보다 낮으면 참여하지 않습니다.
+  **실제로 걸린 cap은 아래 "참여 경매·cap 조회"의 API로 읽으세요 — FE가 예산·시세로 다시 계산하지 않습니다.**
+- 한 번에 한 경매에만 참여합니다(가장 적합한 후보 1개).
+
+---
+
+## POST /api/purchase-goals — 목표 등록
+
+### Request Body
+
+| 필드 | 타입 | 필수 | null | 검증 / 의미 |
+| --- | --- | --- | --- | --- |
+| `brand` | `string` | X | O | 브랜드. `modelKey`가 없을 때 후보 필터로 쓰임 |
+| `modelKey` | `string` | X | O | 시세 카탈로그 모델 키(예: `nb990`). **없으면 카탈로그 모델로 거르지 못해 후보를 찾기 어렵습니다** — parse 결과가 `null`이면 확인 화면에서 모델 선택을 유도 |
+| `modelQuery` | `string` | **O** | X | 사람이 읽는 모델 설명. `@NotBlank` |
+| `minCondition` | `string` | **O** | X | `DS` / `S` / `A` / `B` / `C` (앞뒤 공백·대소문자 무시). 그 외 값은 `400`/`40005` |
+| `sizeKr` | `number` | X | O | 사이즈(mm). 보내면 `> 0`. 범위(220~320)는 검사하지 않음. `null`이면 모든 사이즈가 후보 |
+| `hardMaxAmount` | `number` | **O** | X | 예산 상한(원). `> 0` |
+| `freeTextConditions` | `string` | X | O | 참고 사항(필수 조건으로 쓰이지 않음 — 매물 판정의 참고 문맥) |
+| `deadline` | `string` (ISO-8601 오프셋) | **O** | X | 목표 마감 시각. **현재 이후**여야 함(아니면 `400`/`40005`) |
+
+**parse 초안과의 관계.** `GoalDraft`의 `brand`/`modelKey`/`modelQuery`/`minCondition`/`hardMaxAmount`/`sizeKr`/`freeTextConditions`는
+같은 이름으로 그대로 옮길 수 있습니다. `confidence`·`warnings`는 등록 요청에 없습니다. 초안에 **`deadline` 필드는 없습니다** —
+"다음주 중으로" 같은 기한 표현은 해석하지 않으므로, 확인 화면에서 사용자가 날짜·시각을 **직접 입력·확인**해야 합니다.
+초안에서 `null`인 필수 값(`modelQuery`·`minCondition`·`hardMaxAmount`)도 사용자가 채워야 하며, 서버는 빠진 값을 임의로
+채워 등록하지 않습니다(빠지면 `400`).
+
+```json
+{
+  "brand": "New Balance",
+  "modelKey": "nb990",
+  "modelQuery": "New Balance 990",
+  "minCondition": "A",
+  "sizeKr": 270,
+  "hardMaxAmount": 150000,
+  "freeTextConditions": "박스 있으면 좋음",
+  "deadline": "2026-11-07T23:59:00+09:00"
+}
+```
+
+### Response — 201 Created
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": 12, "userId": 3,
+    "brand": "New Balance", "modelKey": "nb990", "modelQuery": "New Balance 990",
+    "minCondition": "A", "sizeKr": 270, "hardMaxAmount": 150000, "freeTextConditions": "박스 있으면 좋음",
+    "deadline": "2026-11-07T23:59:00+09:00",
+    "status": "ACTIVE",
+    "currentAuctionId": null,
+    "createdAt": "2026-10-31T21:00:00+09:00",
+    "participationCount": 0,
+    "wonCount": 0
+  },
+  "error": null
+}
+```
+
+### Failure
+
+| HTTP | code | 상황 |
+| --- | --- | --- |
+| 400 | 40001 | 필수값 누락(`modelQuery`/`minCondition`/`hardMaxAmount`/`deadline`), `hardMaxAmount ≤ 0`, `sizeKr ≤ 0` |
+| 400 | 40005 | `minCondition`이 DS/S/A/B/C가 아님, `deadline`이 현재 이전 |
+| 401 | 40101 | 미인증 |
+
+## GET /api/purchase-goals — 내 목표 목록
+
+본인 목표 전체(페이지네이션 없음), 생성 시각 최신순. 항목은 위 등록 응답과 같은 필드입니다.
+
+| 필드 | 의미 |
+| --- | --- |
+| `status` | 위 "목표 상태" |
+| `currentAuctionId` | 지금 참여 중인 경매 ID(`ENGAGED`/`CANCEL_REQUESTED`). `FULFILLED`면 **낙찰한 경매 ID가 남아 있습니다**. `ACTIVE`(재탐색 포함)·`CANCELLED`(`ACTIVE`에서 취소)·`EXPIRED`(`ACTIVE`에서 만료)는 `null`. 참여 경매 패배·취소 후 `EXPIRED`·`CANCELLED`로 끝난 경우에는 **마지막 참여 경매 ID가 그대로 남습니다** — 진행 중 여부는 `currentAuctionId`가 아니라 `status`로 판단하세요 |
+| `participationCount` | 자동입찰을 실제로 건 경매 수(평가만 하고 참여하지 않은 경매 제외) |
+| `wonCount` | 그중 본인 주문이 생긴(낙찰한) 경매 수 |
+
+## GET /api/purchase-goals/{id} — 목표 상세(+참여 이력)
+
+목록 항목 필드에 `participations`가 추가됩니다.
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": 12, "status": "FULFILLED", "currentAuctionId": 31, "participationCount": 2, "wonCount": 1,
+    "...": "목록과 같은 필드",
+    "participations": [
+      { "auctionId": 30, "status": "LOST", "auctionStatus": "ENDED" },
+      { "auctionId": 31, "status": "WON", "auctionStatus": "ENDED" }
+    ]
+  },
+  "error": null
+}
+```
+
+| `participations[]` 필드 | 의미 |
+| --- | --- |
+| `auctionId` | 참여한 경매 ID — 경매 상세 `GET /api/auctions/{auctionId}`, 실시간 `GET /api/auctions/{auctionId}/live`로 이동할 ID |
+| `status` | `SCHEDULED`(참여 예정, 경매 시작 전) / `LIVE`(진행 중) / `WON`(종료 + 본인 주문 있음) / `LOST`(종료 + 본인 주문 없음, **또는 경매 취소**) |
+| `auctionStatus` | 경매의 현재 상태 그대로(#143 추가): `SCHEDULED` / `LIVE` / `ENDED` / `CANCELED`. `status = LOST`일 때 `ENDED`면 패배, `CANCELED`면 경매 취소 |
+
+- 순서: **참여(자동입찰 등록) 순서**(오래된 것부터).
+- 참여 이력은 조회 시점의 경매 상태와 주문으로 계산합니다. 상태가 언제 바뀌었는지(시각)는 저장하지 않습니다.
+- `WON`은 낙찰(주문 생성)이며 결제 여부와 무관합니다. 결제 정보는 아래 "결과·결제 조회"의 API를 쓰세요.
+
+## GET /api/purchase-goals/{id}/matches — 매물 평가 이력
+
+스캔이 후보 경매를 **평가한 기록**입니다. 참여 이력과 다릅니다 — 조건에 맞는다고 평가돼도(`matched: true`) cap이 최소 입찰가보다
+낮거나 다른 후보가 더 적합하면 참여하지 않을 수 있고, 평가하지 않고 필터에서 빠진 경매는 여기에 나오지 않습니다.
+
+```json
+{
+  "success": true,
+  "data": [
+    { "auctionId": 31, "matched": true,  "semanticScore": 0.92, "reason": "상품 정보에서 New Balance 990 확인 (표기 '990v6')" },
+    { "auctionId": 29, "matched": false, "semanticScore": 0.0,  "reason": "매물은 New Balance 574로 판정 - 요청 모델(New Balance 990)과 다름" }
+  ],
+  "error": null
+}
+```
+
+| 필드 | 의미 |
+| --- | --- |
+| `auctionId` | 평가한 경매 |
+| `matched` | 매물이 목표 모델·조건에 맞는다고 판정했는지 |
+| `semanticScore` | 0~1 적합도. `matched: false`면 `0.0` |
+| `reason` | 판정 근거 문구(사람이 읽는 문장). 규칙 기반 판정이면 고정 형식 문장, AI 판정이면 AI가 쓴 문장(비어 있으면 `"AI 판정"`). **낙찰·패배 같은 경매 결과가 아닙니다** |
+
+- 순서: 평가 시각 최신순. (목표, 경매) 한 쌍은 한 번만 평가해 저장합니다(다음 스캔은 저장된 결과 재사용). 평가 중 오류가 난 후보는 기록되지 않고 다음 스캔에서 다시 평가합니다.
+
+## DELETE /api/purchase-goals/{id} — 목표 취소
+
+```json
+{ "success": true, "data": { "id": 12, "status": "CANCEL_REQUESTED", "updatedAt": "2026-10-31T21:10:00+09:00" }, "error": null }
+```
+
+| 취소 전 상태 | 결과 `status` | 의미 |
+| --- | --- | --- |
+| `ACTIVE` | `CANCELLED` | 바로 종료 |
+| `ENGAGED` | `CANCEL_REQUESTED` | 참여 중인 경매는 그대로 진행(자동입찰 철회 없음). 낙찰하면 `FULFILLED`, 패배·경매 취소면 `CANCELLED` |
+| 그 외 | — | `409`/`40916` (`ACTIVE/ENGAGED 상태에서만 취소할 수 있습니다. 현재 상태: ...`) |
+
+| HTTP | code | 상황 (조회·평가 이력·취소 공통) |
+| --- | --- | --- |
+| 401 | 40101 | 미인증 |
+| 403 | 40306 | 다른 사용자의 목표 |
+| 404 | 40406 | 존재하지 않는 목표 |
+| 409 | 40916 | (취소) 취소할 수 없는 상태 |
+
+---
+
+## 구매 에이전트 화면 연동 가이드 (#143)
+
+새 API 없이 기존 API를 조합합니다.
+
+### 1. 조건 입력 → 등록
+
+1. `POST /api/purchase-goals/parse` → 초안. `warnings`를 그대로 보여 주고, 첫 줄이 "AI 해석에 실패해..."면 규칙 기반 초안이니 수정 유도. `confidence < 0.7`이면 수정 유도 강조. parse가 실패(`50003`)하면 빈 폼으로 직접 입력.
+2. 확인 화면에서 `null`인 필수 값과 **`deadline`을 사용자가 직접 입력**.
+3. `POST /api/purchase-goals` → `201`, `status: ACTIVE`.
+
+### 2. 진행 상태·참여 경매
+
+| 화면에 필요한 정보 | 조회 위치 |
+| --- | --- |
+| 목표 상태 | `GET /api/purchase-goals/{id}` → `status` |
+| 참여 중인 경매 ID | 같은 응답 `currentAuctionId`(`status`가 `ENGAGED`/`CANCEL_REQUESTED`일 때) 또는 `participations[]` 중 `status`가 `SCHEDULED`/`LIVE`인 항목 |
+| 상품명·썸네일·경매 status·startsAt·startPrice | `GET /api/auctions/{auctionId}` → `product.name`, `product.imageUrls[0]`, `status`, `startsAt`, `startPrice` (auction-spec §1) |
+| 실제 자동입찰 cap | `GET /api/auctions/{auctionId}` → `myState.autoBidCap` 또는 `GET /api/auctions/{auctionId}/auto-bids/me` → `maxAmount` (auction-spec §6). 본인 자동입찰이 없으면 각각 `null` / `404`(`40404`) |
+| 이 경매가 에이전트 관리인지 | `myState.purchaseGoalId`(이 자동입찰을 만든 목표 ID, 목표가 끝나도 남음) / `myState.managedByPurchaseAgent`(지금 에이전트가 관리 중인지 — 목표가 `ENGAGED`·`CANCEL_REQUESTED`이고 이 경매가 `currentAuctionId`일 때만 `true`). `GET .../auto-bids/me`에도 같은 두 필드 |
+| 상세·실시간 화면 이동 | `auctionId`로 `GET /api/auctions/{auctionId}`, `GET /api/auctions/{auctionId}/live` |
+| 경매 시작 안내 | 참여 경매의 `status`가 `SCHEDULED` → `LIVE`로 바뀐 것을 조회로 확인(별도 알림 없음) |
+
+**에이전트 관리 중 제한.** `managedByPurchaseAgent = true`인 경매에서는 본인 직접 입찰(`POST .../bids`), 자동입찰 수정(`PATCH .../auto-bids/me`),
+자동입찰 중단(`DELETE .../auto-bids/me`)이 `409`/`40917`(`AGENT_MANAGED_AUCTION`, "Purchase Agent가 관리 중인 경매입니다")로 거절됩니다.
+`auto-bids/me`의 `canModify`/`canCancel`은 이 제한을 반영하지 않고 항상 `true`이므로, 버튼 노출은 `managedByPurchaseAgent`로 판단하세요.
+목표가 끝나거나 다른 경매로 옮겨 가면 제한이 풀립니다.
+
+### 3. 참여 이력·결과·결제
+
+| 정보 | 조회 위치 |
+| --- | --- |
+| 이전 참여 경매 목록과 결과(WON/LOST, 패배/취소 구분) | `GET /api/purchase-goals/{id}` → `participations[]` (`status`, `auctionStatus`) |
+| 평가했지만 참여하지 않은 경매와 이유 | `GET /api/purchase-goals/{id}/matches` |
+| 지난 경매의 내 결과·최종가 | `GET /api/auctions/{auctionId}/result` (auction-spec §10) — `result`, `finalPrice`, `myLastBidAmount` |
+| 낙찰 금액·결제 기한·주문 | 같은 `/result`의 `orderId`·`totalAmount`·`paymentDeadline`·`orderStatus`, 상세는 `GET /api/orders/{orderId}` (auction-spec §12) |
+
+### 4. 알림·채팅 문장
+
+에이전트 관련 알림은 기존 알림 API(`GET /api/notifications`)로 옵니다. 새 경매 시작·목표 만료 알림은 없습니다.
+
+| `type` | 생기는 때 | `auctionId` | `resourceId` | 문구(`title` / `body`) |
+| --- | --- | --- | --- | --- |
+| `PURCHASE_AGENT_ENGAGED` | 에이전트가 경매에 자동입찰을 등록함 | 참여 경매 | 목표 ID | "구매 대행이 입찰을 시작했습니다" / "설정하신 조건에 맞는 경매를 찾아 자동입찰을 등록했습니다." |
+| `PURCHASE_AGENT_LOST` | 참여 경매 패배·경매 취소가 반영됨 | 그 경매 | 목표 ID | "구매 대행이 낙찰하지 못했습니다" / 계속 찾는 중이면 "...계속해서 조건에 맞는 경매를 찾고 있습니다.", 끝났으면(`EXPIRED`·`CANCELLED`) "...더 이상 참여할 수 있는 경매가 없어 구매 대행을 종료합니다." |
+| `AUCTION_WON` | 낙찰(에이전트 경매 포함, 별도 에이전트 타입 없음) | 경매 | 주문 ID | "낙찰되었습니다" |
+
+채팅 화면 문장은 FE가 **목표 상태 + 참여 이력 + 위 알림**으로 구성합니다. 서버는 상태 전이 이력(언제 어떤 상태였는지)을
+저장하지 않으므로, 과거의 모든 전이를 복원할 수는 없습니다. 표현 가능한 범위는 다음과 같습니다:
+등록(`createdAt`), 참여한 경매와 각 결과(`participations`, 시각 없음), 평가 기록(`matches`, 시각 없음 — 응답에 평가 시각 필드 없음),
+참여 시작·패배 시점(`PURCHASE_AGENT_ENGAGED`/`LOST` 알림의 `createdAt`), 낙찰 시점(`AUCTION_WON` 알림), 현재 상태(`status`).
+목표 만료는 `status = EXPIRED`로만 표시합니다(만료 시각·알림 없음, 패배와 함께 끝난 경우에만 `PURCHASE_AGENT_LOST` 알림이 있음).
+
+---
+
+# 마이페이지 API (#143)
+
+세 API 모두 **로그인 필수**이며 로그인 사용자 본인 데이터만 반환합니다(경로·쿼리로 다른 사용자를 지정할 수 없음).
+dev/prod에서 토큰 없이 호출하면 `401`(`40101`)이고, `X-User-Id` 헤더는 무시됩니다.
+
+## GET /api/me — 내 정보
+
+```json
+{ "success": true, "data": { "userId": 3, "nickname": "jane", "email": "jane@example.com" }, "error": null }
+```
+
+| 필드 | null | 설명 |
+| --- | --- | --- |
+| `userId` | X | 사용자 ID |
+| `nickname` | X | 항상 값이 있음. 카카오가 닉네임을 주지 않은 사용자는 가입 시 `회원-` + 임의 8자로 채워짐 |
+| `email` | **O** | 카카오 이메일 미동의·이메일 없는 계정이면 `null` |
+
+프로필 사진 조회·수정은 이 API에 없습니다.
+
+## GET /api/me/auctions — 나의 경매(내가 참여한 경매)
+
+내가 **참여한** 경매 목록입니다. 참여 기준은 다음 둘 중 하나입니다.
+
+1. 이 경매에 **내 입찰 기록**이 하나라도 있다 — 직접 입찰이든, 자동입찰(구매 에이전트가 등록한 자동입찰 포함)이 대신 넣은 입찰이든.
+2. 이 경매에 **취소되지 않은 내 자동입찰 설정**이 있다 — `RESERVED`(예약)·`ACTIVE`·`CAP_REACHED`. 구매 에이전트가 등록한 자동입찰도 같다.
+
+- 자동입찰을 걸었다가 **입찰이 생기기 전에 중단**(`DELETE .../auto-bids/me`, 설정이 `CANCELED`)했다면 참여로 보지 않습니다.
+  중단 전에 자동입찰이 실제로 입찰했다면 1번으로 포함됩니다.
+- **판매자라는 이유로는 포함되지 않습니다**(판매자는 자기 경매에 입찰할 수 없음). 판매 관리용 목록은 제공하지 않습니다.
+- 여러 번 입찰하거나 직접·자동입찰을 함께 써도 **경매당 한 번**만 나옵니다. 중복은 조회 단계에서 생기지 않으므로 `size`와 `hasNext`는
+  경매 수 기준으로 정확합니다.
+- 경매가 끝나거나 취소돼도 자동입찰 설정은 `CANCELED`로 바뀌지 않으므로, 자동입찰을 예약해 둔 경매가 판매자에 의해 취소되면 `past`에 나옵니다.
+
+| Query | 기본 | 허용 | 설명 |
+| --- | --- | --- | --- |
+| `state` | `current` | `current` / `past` | `current` = 참여 중인 `SCHEDULED`·`LIVE` 경매, `past` = 참여했던 `ENDED`·`CANCELED` 경매(낙찰·패찰 모두). 그 외 값은 `400`/`40001` |
+| `page` | `0` | `0` 이상 | 0부터 |
+| `size` | `20` | `1`~`50` | |
+
+- 정렬: 경매 생성 시각(`auctions.created_at`) 최신순 → 경매 ID 내림차순.
+- 응답 형식은 기본 경매 목록(auction-spec §24)과 같습니다: `items`(카드) / `page` / `size` / `hasNext`. 빈 결과·마지막 페이지를 넘긴 `page`는
+  `items: []`, `hasNext: false`(200).
+- 카드 필드는 auction-spec §23과 같습니다. `isLiked`는 내가 그 경매에 관심을 눌렀는지입니다.
+- **종료 경매의 가격:** `currentPrice`는 경매의 가격(종료 시점 최고 입찰가)이며 **내 입찰가가 아닙니다**. 취소된 경매는 시작 전에만
+  취소되므로 `startPrice`와 같습니다. **낙찰·패찰 여부와 내 결제 금액은 이 목록에 없습니다** — `GET /api/auctions/{auctionId}/result`
+  (auction-spec §10)의 `result`·`myLastBidAmount`·`finalPrice`·`orderId`를 쓰세요. 낙찰자가 포기해 차순위 구매자가 수락한 경우처럼
+  실제 주문 금액이 `currentPrice`와 다를 수 있으므로 `currentPrice`를 결제 금액으로 쓰지 마세요.
+
+```http
+GET /api/me/auctions?state=past&page=0&size=20
+Authorization: Bearer {accessToken}
+```
+
+```json
+{
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "auctionId": 31, "productId": 21, "brand": "Nike", "name": "Nike Dunk Low Panda",
+        "thumbnailUrl": "https://{bucket}.s3.ap-northeast-2.amazonaws.com/{key}?X-Amz-...",
+        "status": "ENDED", "grade": "A", "startPrice": 10000, "currentPrice": 25000,
+        "likeCount": 1, "isLiked": true
+      }
+    ],
+    "page": 0, "size": 20, "hasNext": false
+  },
+  "error": null
+}
+```
+
+## GET /api/me/likes — 관심 경매 목록
+
+내가 관심 등록한 경매입니다. **종료·취소된 경매도 그대로 나옵니다**(사용자가 저장한 목록이라 상태로 숨기지 않음 — 카드의 `status`로 표시).
+
+| Query | 기본 | 허용 |
+| --- | --- | --- |
+| `page` | `0` | `0` 이상 |
+| `size` | `20` | `1`~`50` |
+
+- 정렬: 관심 등록 시각 최신순 → 관심 ID 내림차순(해제 후 다시 등록하면 새 등록 시각 기준).
+- 응답 형식·빈 목록 규칙은 `/api/me/auctions`와 같습니다. 항목의 `isLiked`는 모두 `true`, `likeCount`는 전체 사용자 기준입니다.
+- 관심 등록·해제는 기존 `POST`·`DELETE /api/auctions/{auctionId}/likes`(auction-spec §19–20)를 그대로 씁니다.
+- 관심은 존재하는 경매만 가리킵니다(경매 FK NOT NULL, 경매·상품 삭제 기능 없음).
+
+| HTTP | code | 상황 (`/api/me/auctions`, `/api/me/likes` 공통) |
+| --- | --- | --- |
+| 400 | 40001 | `page` < 0, `size`가 1~50 밖, `page`/`size`가 숫자가 아님, (`/auctions`) `state`가 current/past가 아님 |
+| 401 | 40101 | 미인증 |
 
 ---
 
@@ -2003,9 +2347,9 @@ Authorization: Bearer {accessToken}
 | data | Object | API 관련 데이터 | O |
 | — notifications | Array<Object> | 알림 목록 | O |
 | —— id | Long | 알림 ID | O |
-| —— type | String | `AUCTION_WON` / `BACKUP_OFFER_CREATED` / `PAYMENT_EXPIRED` | O |
+| —— type | String | `AUCTION_WON` / `BACKUP_OFFER_CREATED` / `PAYMENT_EXPIRED` / `PURCHASE_AGENT_ENGAGED` / `PURCHASE_AGENT_LOST` | O |
 | —— auctionId | Long | 관련 경매 ID | O |
-| —— resourceId | Long | 이벤트를 발생시킨 소스 엔티티 ID(타입별로 `Order.id` 또는 `BackupOffer.id`) | O |
+| —— resourceId | Long | 이벤트를 발생시킨 소스 엔티티 ID(타입별로 `Order.id` 또는 `BackupOffer.id`, `PURCHASE_AGENT_*`는 구매 목표 ID — "구매 에이전트 화면 연동 가이드" 4 참고) | O |
 | —— title | String | 고정 정적 문구(타입별, 상품명 등 미포함) | O |
 | —— body | String | 고정 정적 문구(타입별, 상품명 등 미포함) | O |
 | —— readAt | String | 읽은 시각(안 읽었으면 null) | X |

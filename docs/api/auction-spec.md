@@ -3504,8 +3504,8 @@ POST /api/auctions/{previousAuctionId}/relist
                                     AUCTION_WON / BACKUP_OFFER_CREATED / PAYMENT_EXPIRED
                                     3종뿐 — AUCTION_STARTED/PAYMENT_COMPLETED 등은 후속 스코프
 푸시 / 디바이스 토큰 / FCM / APNs / SSE / WebSocket — 후속 스코프(REST 조회/polling만 지원)
-관심 상품 목록 API               — 미구현
-내 참여 경매 목록 API             — 미구현
+관심 상품 목록 API               — #143에서 구현(GET /api/me/likes, spec.md 「# 마이페이지 API」)
+내 참여 경매 목록 API             — #143에서 구현(GET /api/me/auctions, spec.md 「# 마이페이지 API」)
 실제 PG 연동 / 결제수단 API      — 미구현
 환불 / 웹훅                      — 미구현
 배송 도메인                      — 미구현

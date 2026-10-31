@@ -152,7 +152,8 @@ public class PurchaseGoalQueryService {
             List<PurchaseGoalParticipationResponse> participations = entry.getValue().stream()
                     .map(auctionId -> new PurchaseGoalParticipationResponse(
                             auctionId,
-                            classify(statusByAuctionId.get(auctionId), wonAuctionIds.contains(auctionId))
+                            classify(statusByAuctionId.get(auctionId), wonAuctionIds.contains(auctionId)),
+                            statusByAuctionId.get(auctionId)
                     ))
                     .toList();
             result.put(entry.getKey(), participations);

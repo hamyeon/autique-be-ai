@@ -385,6 +385,113 @@ class JwtAuthorizationWiringMySqlIT {
         assertThat(badPage.path("error").path("code").asInt()).isEqualTo(40001);
     }
 
+    // #143: 마이페이지 3종이 실제 MySQL·dev SecurityFilterChain에서 로그인 필수이고, JWT 사용자 본인 데이터만
+    // 돌려주는지 본다(다른 사용자의 X-User-Id 헤더는 무시). findParticipatedByUserAndStatuses(EXISTS 서브쿼리)·
+    // findLikedAuctionIdsByUserId 쿼리가 MySQL에서 그대로 동작하는지도 함께 확인된다.
+    @Test
+    void MyPage_내_정보_나의_경매_관심_목록은_JWT_사용자_본인_데이터만_반환한다() {
+        User seller = persistUser("mypage-seller");
+        User otherSeller = persistUser("mypage-other");
+        Auction myLive = persistLiveAuction(persistProduct(seller));
+        Auction myEnded = persistEndedAuctionWithBids(persistProduct(seller), otherSeller);
+        Auction othersLive = persistLiveAuction(persistProduct(otherSeller));
+        // otherSeller가 seller의 진행 중 경매에 입찰한다(otherSeller는 myEnded에도 이미 입찰했다).
+        bidRepository.save(Bid.place(myLive, otherSeller, 15000L, BidType.MANUAL));
+        myLive.placeManualBid(otherSeller, 15000L);
+        myLive = auctionRepository.save(myLive);
+        assertThat(status(postJson("/api/auctions/" + othersLive.getId() + "/likes", bearer(seller), "{}"))).isEqualTo(200);
+        assertThat(status(postJson("/api/auctions/" + myEnded.getId() + "/likes", bearer(otherSeller), "{}"))).isEqualTo(200);
+
+        // 로그인 필수
+        assertThat(status(getJson("/api/me", new HttpHeaders()))).isEqualTo(401);
+        assertThat(status(getJson("/api/me/auctions", new HttpHeaders()))).isEqualTo(401);
+        assertThat(status(getJson("/api/me/likes", new HttpHeaders()))).isEqualTo(401);
+
+        // 내 정보: JWT 사용자. 다른 사용자의 X-User-Id 헤더는 무시된다.
+        JsonNode me = getJson("/api/me", bearerWithForeignXUserId(seller, otherSeller));
+        assertThat(status(me)).isEqualTo(200);
+        assertThat(me.path("data").path("userId").asLong()).isEqualTo(seller.getId());
+        assertThat(me.path("data").path("nickname").asText()).isEqualTo("mypage-seller");
+
+        // 나의 경매 = 내가 참여(입찰·유효한 자동입찰)한 경매. 판매자라는 이유로는 나오지 않는다.
+        JsonNode sellerCurrent = getJson("/api/me/auctions?state=current", bearer(seller));
+        assertThat(status(sellerCurrent)).isEqualTo(200);
+        assertThat(sellerCurrent.path("data").path("items").size()).isZero();
+        assertThat(getJson("/api/me/auctions?state=past", bearer(seller)).path("data").path("items").size()).isZero();
+
+        // 참여자(otherSeller): seller의 X-User-Id를 붙여도 JWT 사용자 기준이다.
+        JsonNode current = getJson("/api/me/auctions?state=current", bearerWithForeignXUserId(otherSeller, seller));
+        assertThat(status(current)).isEqualTo(200);
+        assertThat(current.path("data").path("items").size()).isEqualTo(1);
+        assertThat(current.path("data").path("items").get(0).path("auctionId").asLong()).isEqualTo(myLive.getId());
+        assertThat(current.path("data").path("hasNext").asBoolean()).isFalse();
+        JsonNode past = getJson("/api/me/auctions?state=past", bearer(otherSeller));
+        assertThat(past.path("data").path("items").size()).isEqualTo(1);
+        JsonNode endedCard = past.path("data").path("items").get(0);
+        assertThat(endedCard.path("auctionId").asLong()).isEqualTo(myEnded.getId());
+        assertThat(endedCard.path("status").asText()).isEqualTo("ENDED");
+        assertThat(endedCard.path("currentPrice").asLong()).isEqualTo(15000L);
+        assertThat(endedCard.path("likeCount").asInt()).isEqualTo(1);
+        assertThat(endedCard.path("isLiked").asBoolean()).isTrue();
+        JsonNode badState = getJson("/api/me/auctions?state=all", bearer(seller));
+        assertThat(status(badState)).isEqualTo(400);
+        assertThat(badState.path("error").path("code").asInt()).isEqualTo(40001);
+
+        // 관심 목록: 내 관심만(다른 사용자의 관심은 섞이지 않는다).
+        JsonNode likes = getJson("/api/me/likes", bearerWithForeignXUserId(seller, otherSeller));
+        assertThat(status(likes)).isEqualTo(200);
+        assertThat(likes.path("data").path("items").size()).isEqualTo(1);
+        assertThat(likes.path("data").path("items").get(0).path("auctionId").asLong()).isEqualTo(othersLive.getId());
+        assertThat(likes.path("data").path("items").get(0).path("isLiked").asBoolean()).isTrue();
+        JsonNode othersLikes = getJson("/api/me/likes", bearer(otherSeller));
+        assertThat(othersLikes.path("data").path("items").get(0).path("auctionId").asLong()).isEqualTo(myEnded.getId());
+    }
+
+    // #143: 구매 목표 상세·평가 이력·취소가 JWT 소유자만 가능하고, 경로의 goalId를 바꿔도 다른 사용자의 목표에
+    // 접근하거나 취소할 수 없는지 본다(404 -> 403 순서). 스캔 스케줄러는 꺼진 상태(기본값)라 상태가 바뀌지 않는다.
+    @Test
+    void PurchaseGoal_상세_평가이력_취소는_JWT_소유자만_가능하다() {
+        User owner = persistUser("goal-owner");
+        User other = persistUser("goal-other");
+        String body = """
+                {"brand":"New Balance","modelKey":"nb990","modelQuery":"뉴발란스 990","minCondition":"B",
+                 "sizeKr":270,"hardMaxAmount":200000,"freeTextConditions":null,
+                 "deadline":"%s"}
+                """.formatted(java.time.OffsetDateTime.now().plusDays(3));
+        JsonNode created = postJson("/api/purchase-goals", bearer(owner), body);
+        assertThat(status(created)).isEqualTo(201);
+        assertThat(created.path("data").path("status").asText()).isEqualTo("ACTIVE");
+        long goalId = created.path("data").path("id").asLong();
+        String goalUrl = "/api/purchase-goals/" + goalId;
+
+        assertThat(status(getJson(goalUrl, bearer(owner)))).isEqualTo(200);
+        assertThat(getJson(goalUrl, bearer(owner)).path("data").path("participations").size()).isZero();
+        assertThat(status(getJson(goalUrl + "/matches", bearer(owner)))).isEqualTo(200);
+
+        // 다른 사용자: 상세·평가 이력·취소 모두 403/40306. owner의 X-User-Id를 붙여도 JWT가 우선한다.
+        JsonNode otherDetail = getJson(goalUrl, bearerWithForeignXUserId(other, owner));
+        assertThat(status(otherDetail)).isEqualTo(403);
+        assertThat(otherDetail.path("error").path("code").asInt()).isEqualTo(40306);
+        assertThat(status(getJson(goalUrl + "/matches", bearer(other)))).isEqualTo(403);
+        ResponseEntity<String> otherCancel = restTemplate.exchange(
+                goalUrl, HttpMethod.DELETE, new HttpEntity<>(bearer(other)), String.class);
+        assertThat(otherCancel.getStatusCode().value()).isEqualTo(403);
+        assertThat(getJson(goalUrl, bearer(owner)).path("data").path("status").asText()).isEqualTo("ACTIVE");
+        // 다른 사용자의 목록에는 나오지 않는다.
+        assertThat(getJson("/api/purchase-goals", bearer(other)).path("data").size()).isZero();
+
+        // 없는 goalId는 404/40406.
+        JsonNode missing = getJson("/api/purchase-goals/99999999", bearer(owner));
+        assertThat(status(missing)).isEqualTo(404);
+        assertThat(missing.path("error").path("code").asInt()).isEqualTo(40406);
+
+        // 소유자 취소: ACTIVE -> CANCELLED.
+        ResponseEntity<String> ownerCancel = restTemplate.exchange(
+                goalUrl, HttpMethod.DELETE, new HttpEntity<>(bearer(owner)), String.class);
+        assertThat(ownerCancel.getStatusCode().value()).isEqualTo(200);
+        assertThat(getJson(goalUrl, bearer(owner)).path("data").path("status").asText()).isEqualTo("CANCELLED");
+    }
+
     @Test
     void BidHistory_isMine과_myState가_JWT_기준으로_개인화된다() {
         User seller = persistUser("seller");
