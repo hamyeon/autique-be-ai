@@ -308,6 +308,128 @@ class MyAuctionQueryServiceTest {
                 .isInstanceOf(InvalidPageRequestException.class);
     }
 
+    // ===== #147 판매 경매(내가 판매 등록한 경매) =====
+
+    @Test
+    void 판매_경매는_내가_판매자인_경매만_current_past로_나눠_조회한다() {
+        Auction myScheduled = persistAuction(me, AuctionStatus.SCHEDULED);
+        Auction myLive = persistAuction(me, AuctionStatus.LIVE);
+        Auction myEnded = persistAuction(me, AuctionStatus.ENDED);
+        Auction myCanceled = persistAuction(me, AuctionStatus.CANCELED);
+        // 제외: 다른 사용자의 경매에 내가 입찰·자동입찰·관심만 한 경우
+        Auction othersWithMyBid = persistAuction(other, AuctionStatus.LIVE);
+        bid(othersWithMyBid, me, 15000L);
+        Auction othersWithMyAutoBid = persistAuction(other, AuctionStatus.SCHEDULED);
+        reserveAutoBid(othersWithMyAutoBid, me);
+        Auction othersLikedByMe = persistAuction(other, AuctionStatus.ENDED);
+        like(othersLikedByMe, me);
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(ids(service.getMySellingAuctions(me.getId(), "current", 0, 20)))
+                .containsExactlyInAnyOrder(myScheduled.getId(), myLive.getId());
+        assertThat(ids(service.getMySellingAuctions(me.getId(), "past", 0, 20)))
+                .containsExactlyInAnyOrder(myEnded.getId(), myCanceled.getId());
+        // 참여 경매 목록은 그대로 "참여" 기준이다 - 판매 경매가 섞이지 않는다
+        assertThat(ids(service.getMyParticipatedAuctions(me.getId(), "current", 0, 20)))
+                .containsExactlyInAnyOrder(othersWithMyBid.getId(), othersWithMyAutoBid.getId());
+    }
+
+    @Test
+    void 재경매한_상품은_판매_경매에서_경매마다_따로_나온다() {
+        Product product = persistProduct(me);
+        Auction first = persistAuction(product, AuctionStatus.ENDED);
+        Auction relisted = persistAuction(product, AuctionStatus.SCHEDULED);
+        entityManager.flush();
+        entityManager.clear();
+
+        AuctionListResponse current = service.getMySellingAuctions(me.getId(), "current", 0, 20);
+        AuctionListResponse past = service.getMySellingAuctions(me.getId(), "past", 0, 20);
+
+        assertThat(ids(current)).containsExactly(relisted.getId());
+        assertThat(ids(past)).containsExactly(first.getId());
+        assertThat(current.items().get(0).productId()).isEqualTo(past.items().get(0).productId());
+    }
+
+    @Test
+    void 판매_경매는_생성_시각_최신순이고_같으면_경매_ID_내림차순이며_페이지로_나뉜다() {
+        LocalDateTime base = LocalDateTime.now().minusDays(1).withNano(0);
+        Auction oldest = persistAuction(me, AuctionStatus.LIVE);
+        Auction tieLow = persistAuction(me, AuctionStatus.SCHEDULED);
+        Auction tieHigh = persistAuction(me, AuctionStatus.SCHEDULED);
+        Auction newest = persistAuction(me, AuctionStatus.LIVE);
+        setCreatedAt("auctions", oldest.getId(), base);
+        setCreatedAt("auctions", tieLow.getId(), base.plusHours(1));
+        setCreatedAt("auctions", tieHigh.getId(), base.plusHours(1));
+        setCreatedAt("auctions", newest.getId(), base.plusHours(2));
+        entityManager.clear();
+
+        AuctionListResponse first = service.getMySellingAuctions(me.getId(), "current", 0, 3);
+        AuctionListResponse second = service.getMySellingAuctions(me.getId(), "current", 1, 3);
+        AuctionListResponse beyond = service.getMySellingAuctions(me.getId(), "current", 5, 3);
+
+        assertThat(ids(first)).containsExactly(newest.getId(), tieHigh.getId(), tieLow.getId());
+        assertThat(first.hasNext()).isTrue();
+        assertThat(ids(second)).containsExactly(oldest.getId());
+        assertThat(second.hasNext()).isFalse();
+        assertThat(beyond.items()).isEmpty();
+        assertThat(beyond.hasNext()).isFalse();
+    }
+
+    @Test
+    void 판매_경매_카드는_경매_가격과_전체_관심_수와_판매자_본인의_관심_여부를_보여준다() {
+        User bidder = persistUser("bidder@vintic.local");
+        Auction sold = persistAuction(me, AuctionStatus.LIVE);
+        bid(sold, bidder, 25000L);
+        sold.end();
+        Auction unsold = persistAuction(me, AuctionStatus.ENDED);
+        like(sold, other);
+        like(sold, bidder);
+        like(unsold, me);
+        entityManager.flush();
+        entityManager.clear();
+
+        List<AuctionCardResponse> cards = service.getMySellingAuctions(me.getId(), "past", 0, 20).items();
+        AuctionCardResponse soldCard = cards.stream().filter(c -> c.auctionId().equals(sold.getId())).findFirst().orElseThrow();
+        AuctionCardResponse unsoldCard = cards.stream().filter(c -> c.auctionId().equals(unsold.getId())).findFirst().orElseThrow();
+
+        assertThat(soldCard.status()).isEqualTo(AuctionStatus.ENDED);
+        assertThat(soldCard.startPrice()).isEqualTo(10000L);
+        assertThat(soldCard.currentPrice()).isEqualTo(25000L);
+        assertThat(soldCard.likeCount()).isEqualTo(2);
+        assertThat(soldCard.isLiked()).isFalse();
+        assertThat(soldCard.thumbnailUrl()).startsWith("signed:");
+        // 유찰(입찰 없음)도 past에 포함되고 currentPrice = startPrice, 판매자 본인의 관심은 그대로 반영된다
+        assertThat(unsoldCard.currentPrice()).isEqualTo(unsoldCard.startPrice());
+        assertThat(unsoldCard.isLiked()).isTrue();
+        assertThat(unsoldCard.likeCount()).isEqualTo(1);
+    }
+
+    @Test
+    void 판매한_경매가_없으면_빈_목록이다() {
+        Auction othersWithMyBid = persistAuction(other, AuctionStatus.LIVE);
+        bid(othersWithMyBid, me, 15000L);
+        entityManager.flush();
+        entityManager.clear();
+
+        AuctionListResponse response = service.getMySellingAuctions(me.getId(), "current", 0, 20);
+
+        assertThat(response.items()).isEmpty();
+        assertThat(response.hasNext()).isFalse();
+    }
+
+    @Test
+    void 판매_경매_state와_page_size가_잘못되면_예외다() {
+        assertThatThrownBy(() -> service.getMySellingAuctions(me.getId(), "all", 0, 20))
+                .isInstanceOf(InvalidPageRequestException.class);
+        assertThatThrownBy(() -> service.getMySellingAuctions(me.getId(), "current", -1, 20))
+                .isInstanceOf(InvalidPageRequestException.class);
+        assertThatThrownBy(() -> service.getMySellingAuctions(me.getId(), "current", 0, 0))
+                .isInstanceOf(InvalidPageRequestException.class);
+        assertThatThrownBy(() -> service.getMySellingAuctions(me.getId(), "current", 0, 51))
+                .isInstanceOf(InvalidPageRequestException.class);
+    }
+
     // ===== 관심 목록 =====
 
     @Test

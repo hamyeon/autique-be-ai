@@ -406,6 +406,7 @@ class JwtAuthorizationWiringMySqlIT {
         assertThat(status(getJson("/api/me", new HttpHeaders()))).isEqualTo(401);
         assertThat(status(getJson("/api/me/auctions", new HttpHeaders()))).isEqualTo(401);
         assertThat(status(getJson("/api/me/likes", new HttpHeaders()))).isEqualTo(401);
+        assertThat(status(getJson("/api/me/selling-auctions", new HttpHeaders()))).isEqualTo(401);
 
         // 내 정보: JWT 사용자. 다른 사용자의 X-User-Id 헤더는 무시된다.
         JsonNode me = getJson("/api/me", bearerWithForeignXUserId(seller, otherSeller));
@@ -436,6 +437,27 @@ class JwtAuthorizationWiringMySqlIT {
         JsonNode badState = getJson("/api/me/auctions?state=all", bearer(seller));
         assertThat(status(badState)).isEqualTo(400);
         assertThat(badState.path("error").path("code").asInt()).isEqualTo(40001);
+
+        // #147 판매 경매 = 내가 판매 등록한 경매. otherSeller의 X-User-Id를 붙여도 JWT(seller) 기준이다.
+        JsonNode sellingCurrent = getJson("/api/me/selling-auctions", bearerWithForeignXUserId(seller, otherSeller));
+        assertThat(status(sellingCurrent)).isEqualTo(200);
+        assertThat(sellingCurrent.path("data").path("items").size()).isEqualTo(1);
+        assertThat(sellingCurrent.path("data").path("items").get(0).path("auctionId").asLong()).isEqualTo(myLive.getId());
+        assertThat(sellingCurrent.path("data").path("items").get(0).path("currentPrice").asLong()).isEqualTo(15000L);
+        JsonNode sellingPast = getJson("/api/me/selling-auctions?state=past", bearer(seller));
+        assertThat(sellingPast.path("data").path("items").size()).isEqualTo(1);
+        JsonNode sellingEnded = sellingPast.path("data").path("items").get(0);
+        assertThat(sellingEnded.path("auctionId").asLong()).isEqualTo(myEnded.getId());
+        assertThat(sellingEnded.path("likeCount").asInt()).isEqualTo(1);
+        assertThat(sellingEnded.path("isLiked").asBoolean()).isFalse();
+        // otherSeller는 seller 경매에 입찰만 했으므로 그 경매들은 otherSeller의 판매 목록에 없다.
+        JsonNode othersSelling = getJson("/api/me/selling-auctions", bearer(otherSeller));
+        assertThat(othersSelling.path("data").path("items").size()).isEqualTo(1);
+        assertThat(othersSelling.path("data").path("items").get(0).path("auctionId").asLong()).isEqualTo(othersLive.getId());
+        assertThat(getJson("/api/me/selling-auctions?state=past", bearer(otherSeller)).path("data").path("items").size()).isZero();
+        JsonNode badSellingSize = getJson("/api/me/selling-auctions?size=abc", bearer(seller));
+        assertThat(status(badSellingSize)).isEqualTo(400);
+        assertThat(badSellingSize.path("error").path("code").asInt()).isEqualTo(40001);
 
         // 관심 목록: 내 관심만(다른 사용자의 관심은 섞이지 않는다).
         JsonNode likes = getJson("/api/me/likes", bearerWithForeignXUserId(seller, otherSeller));
@@ -484,6 +506,25 @@ class JwtAuthorizationWiringMySqlIT {
         JsonNode missing = getJson("/api/purchase-goals/99999999", bearer(owner));
         assertThat(status(missing)).isEqualTo(404);
         assertThat(missing.path("error").path("code").asInt()).isEqualTo(40406);
+
+        // #147: 요청 형식 오류는 500이 아니라 400/405/415다(전체 앱 필터 체인 + JWT 통과 후).
+        JsonNode badJson = postJson("/api/purchase-goals", bearer(owner), "{not json");
+        assertThat(status(badJson)).isEqualTo(400);
+        assertThat(badJson.path("error").path("code").asInt()).isEqualTo(40001);
+        assertThat(badJson.path("error").path("message").asText()).isEqualTo("요청 본문 형식이 올바르지 않습니다.");
+        JsonNode badPath = getJson("/api/purchase-goals/abc", bearer(owner));
+        assertThat(status(badPath)).isEqualTo(400);
+        assertThat(badPath.path("error").path("code").asInt()).isEqualTo(40001);
+        ResponseEntity<String> put = restTemplate.exchange(goalUrl, HttpMethod.PUT, new HttpEntity<>(bearer(owner)), String.class);
+        assertThat(put.getStatusCode().value()).isEqualTo(405);
+        assertThat(put.getBody()).contains("40501");
+        assertThat(put.getHeaders().getAllow()).contains(HttpMethod.GET, HttpMethod.DELETE);
+        HttpHeaders textPlain = bearer(owner);
+        textPlain.setContentType(MediaType.TEXT_PLAIN);
+        ResponseEntity<String> unsupported = restTemplate.exchange(
+                "/api/purchase-goals", HttpMethod.POST, new HttpEntity<>("hello", textPlain), String.class);
+        assertThat(unsupported.getStatusCode().value()).isEqualTo(415);
+        assertThat(unsupported.getBody()).contains("41501");
 
         // 소유자 취소: ACTIVE -> CANCELLED.
         ResponseEntity<String> ownerCancel = restTemplate.exchange(

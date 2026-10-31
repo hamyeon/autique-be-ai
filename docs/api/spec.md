@@ -79,7 +79,7 @@ Base URL : https://<api-공인IP-하이픈>.sslip.io
 | `GET /api/orders/{id}` · `POST /api/orders/{id}/pay` (주문 조회·결제) | 주문 소유자(아니면 `40304`) |
 | `GET /api/backup-offers/{id}` · `POST .../accept` · `POST .../decline` (차순위) | 제안 candidate 본인(아니면 `40305`). accept는 Idempotency-Key |
 | `GET /api/me/penalties` (내 페널티) | 본인 |
-| `GET /api/me` (내 정보) · `GET /api/me/auctions` (나의 경매 — 내가 참여한 경매) · `GET /api/me/likes` (관심 목록) (#143) | 본인 데이터만(다른 사용자 지정 불가) |
+| `GET /api/me` (내 정보) · `GET /api/me/auctions` (나의 경매 — 내가 참여한 경매) · `GET /api/me/selling-auctions` (내가 판매 등록한 경매, #147) · `GET /api/me/likes` (관심 목록) (#143) | 본인 데이터만(다른 사용자 지정 불가) |
 | `POST /api/products/analyze` · `POST /api/products/photos` · `GET /api/products/analyze/{taskId}` · `POST /api/products/analyze/{taskId}/cancel` · `POST /api/products/calculate-price` · `POST /api/products` (상품 등록) | 분석 세션 소유자(타인 조회/취소는 `404`) |
 | `POST /api/purchase-goals/parse` · `POST` · `GET` · `GET /{id}` · `GET /{id}/matches` · `DELETE /{id}` `/api/purchase-goals` (구매 목표) | 목표 소유자. `{id}`가 없으면 `404`/`40406`, 다른 사용자 목표면 `403`/`40306`(상세·평가 이력·취소 공통). 상세는 "# 구매 목표(Purchase Agent) API" 절 |
 | `GET /api/notifications` · `PATCH /api/notifications/{id}/read` · `GET /api/notifications/unread-count` (알림) | 본인 알림(아니면 `40405`) |
@@ -119,12 +119,12 @@ dev/prod에서 `Authorization: Bearer` 누락·토큰 만료·서명 불일치, 
 
 | HTTP 상태 | code | 상황 |
 | --- | --- | --- |
-| 400 | 40001 | 요청 필수값 누락 등 Bean Validation 실패 |
-| 400 | 40002 | 이미지 파일 없음 |
+| 400 | 40001 | 요청값 검증 실패: Bean Validation(필수값 누락 등), 목록 API의 `page`/`size`/`limit`/`state` 범위 오류, 요청 형식 오류(잘못된 JSON·읽을 수 없는 본문·날짜/숫자 등 필드 타입 불일치, 경로 변수·쿼리 파라미터 타입 변환 실패) |
+| 400 | 40002 | 이미지 파일 없음(분석 요청), 상품 등록 시 분석 세션에 저장된 이미지가 3~4장이 아님 |
 | 400 | 40003 | 잘못된 분석 상태에서의 요청 |
 | 400 | 40004 | 필수 요청 헤더 누락 (예: `Idempotency-Key`) |
 | 400 | 40005 | 잘못된 구매 목표 요청 |
-| 400 | 40006 | 경매 시간 설정이 올바르지 않음 (재경매 start/end) |
+| 400 | 40006 | 경매 시간 설정이 올바르지 않음 (상품·첫 경매 등록 `POST /api/products`, 재경매의 start/end) |
 | 400 | 40007 | photoIds 요청 자체가 잘못됨(중복 photoId/slot, 필수 slot 누락) |
 | 401 | 40101 | 인증 실패 (사용자 미식별. `UserNotFoundException`도 방어적으로 이 코드로 매핑) |
 | 401 | 40102 | Kakao access token 무효 (`POST /api/auth/kakao`) |
@@ -154,7 +154,7 @@ dev/prod에서 `Authorization: Bearer` 누락·토큰 만료·서명 불일치, 
 | 409 | 40906 | 자동입찰 상한가가 너무 낮음 |
 | 409 | 40907 | 자동입찰 상한가가 인상되지 않음 |
 | 409 | 40908 | 이미 등록된 자동입찰 존재 |
-| 409 | 40909 | 동시성 충돌 (재시도 가능) |
+| 409 | 40909 | 동시성 충돌 (재시도 가능). 메시지: "다른 요청과 충돌이 발생했습니다. 잠시 후 다시 시도해주세요." |
 | 409 | 40910 | 결제 기한 만료 |
 | 409 | 40911 | 차순위 구매 기한 만료 |
 | 409 | 40912 | 이미 처리된 차순위 제안에 재시도 |
@@ -169,12 +169,32 @@ dev/prod에서 `Authorization: Bearer` 누락·토큰 만료·서명 불일치, 
 | 409 | 40921 | 경매 취소 불가(이미 시작/비 SCHEDULED) |
 | 409 | 40922 | 시작가 수정 불가(시작 1시간 전 이후) |
 | 409 | 40923 | 이미 다른 분석에 사용된 photoId로 재요청 |
+| 405 | 40501 | 지원하지 않는 HTTP 메서드(경로는 있음). 응답 `Allow` 헤더에 허용 메서드 (#147) |
+| 415 | 41501 | 지원하지 않는 `Content-Type` (#147) |
 | 500 | 50001 | 서버 내부 오류(미분류 예외의 catch-all) |
 | 500 | 50002 | S3 이미지 업로드 실패 |
 | 500 | 50003 | AI(OpenAI/Claude) 통신 오류 |
 | 500 | 50004 | 분석 작업 Queue 적재 실패 |
 | 502 | 50201 | Kakao 사용자 정보 조회 실패(upstream) |
 
+> **`message`는 상황마다 달라질 수 있다.** 대부분의 오류는 발생 지점의 설명(대상 ID 등 포함)을 그대로 담으므로
+> 위 표의 "상황"과 문구가 같지 않을 수 있다. **FE는 `error.code`로 분기**하고 `message`는 표시·디버깅용으로만 쓴다.
+>
+> **요청 형식 오류 (#147).** 아래 경우는 컨트롤러에 도달하기 전에 고정 문구로 응답하며, 내부 파싱 예외 원문은
+> 내보내지 않는다. 인증이 필요한 API는 인증 검사가 먼저라 토큰이 없으면 형식과 무관하게 `401`이다.
+>
+> | 상황 | HTTP | code | message |
+> | --- | --- | --- | --- |
+> | 잘못된 JSON, 읽을 수 없는 본문, 날짜·숫자 등 필드 타입 불일치 | 400 | 40001 | 요청 본문 형식이 올바르지 않습니다. |
+> | 경로 변수·쿼리 파라미터 타입 변환 실패 (예: `/api/purchase-goals/abc`) | 400 | 40001 | 요청 값의 형식이 올바르지 않습니다. |
+> | 지원하지 않는 HTTP 메서드 | 405 | 40501 | 지원하지 않는 HTTP 메서드입니다. (`Allow` 헤더 포함) |
+> | 지원하지 않는 `Content-Type` | 415 | 41501 | 지원하지 않는 Content-Type입니다. |
+>
+> 경매 목록 API(`GET /api/auctions`, `/api/auctions/popular`)와 마이페이지 목록 API(`/api/me/auctions`,
+> `/api/me/selling-auctions`, `/api/me/likes`)의 숫자가 아닌 `page`/`size`/`limit`은 같은 `400`/`40001`이지만
+> 메시지에 파라미터 이름이 들어간다(예: `page 값이 숫자가 아닙니다: abc`). 파일 업로드 크기 초과의 응답은 이번에
+> 바꾸지 않았고 확인하지 않았다.
+>
 > **확인 필요.** `Order` 상태 가드(`InvalidOrderStatusException`)와 `Order.create`의
 > `IllegalArgumentException`은 전용 핸들러가 없어 현재 catch-all **500/50001**로 떨어진다(정상 흐름에선
 > 서비스가 먼저 상태를 검사하므로 도달하지 않는 프로그래밍 가드). 전용 4xx 코드를 둘지는 미결 —
@@ -1316,7 +1336,7 @@ POST /api/products                   (아래 본문 — imageUrls 없음)
 상품 정보와 함께 **생성된 첫 경매 요약**(`auctionId`, `auctionStatus`, `auctionStartPrice`,
 `bidIncrement`, `auctionStartAt`, `auctionEndAt`)을 반환합니다. `imageUrls`는 위 규칙으로 결정된 상품
 이미지를 24시간 서명 URL로 바꾼 값입니다. 경매 상세 조회는 `GET /api/auctions/{auctionId}`
-(auction-spec §1)로 이어집니다.
+(auction-spec §1)로 이어집니다. 내가 등록한 상품·경매 목록은 `GET /api/me/selling-auctions`(#147)로 조회합니다.
 
 ### Failure
 
@@ -1913,7 +1933,15 @@ X-User-Id: {userId}
 
 # 마이페이지 API (#143)
 
-세 API 모두 **로그인 필수**이며 로그인 사용자 본인 데이터만 반환합니다(경로·쿼리로 다른 사용자를 지정할 수 없음).
+모든 API가 **로그인 필수**이며 로그인 사용자 본인 데이터만 반환합니다(경로·쿼리로 다른 사용자를 지정할 수 없음).
+
+| API | 의미 |
+| --- | --- |
+| `GET /api/me` | 내 정보 |
+| `GET /api/me/auctions` | **내가 참여한 경매**(입찰·유효한 자동입찰). 판매자라는 이유로는 포함되지 않음 |
+| `GET /api/me/selling-auctions` | **내가 판매 등록한 경매**(#147). 참여 여부와 무관 |
+| `GET /api/me/likes` | 내 관심 경매 |
+
 dev/prod에서 토큰 없이 호출하면 `401`(`40101`)이고, `X-User-Id` 헤더는 무시됩니다.
 
 ## GET /api/me — 내 정보
@@ -1982,6 +2010,103 @@ Authorization: Bearer {accessToken}
 }
 ```
 
+## GET /api/me/selling-auctions — 내가 판매 등록한 경매 (#147)
+
+### API 상세 설명
+
+내가 **판매 등록한 상품의 경매** 목록입니다. 참여 경매 목록(`GET /api/me/auctions`)과 다른 API이며 서로 섞이지 않습니다.
+
+- 상품이 아니라 **경매 단위**입니다. 재경매한 상품은 경매마다 따로 나옵니다(상품으로 합치지 않으므로 이전 경매도 `past`에 남습니다).
+- 다른 사용자가 판매한 경매는 내가 입찰·자동입찰·관심 등록을 했더라도 나오지 않습니다.
+- 상품 등록(`POST /api/products`) 후 내가 등록한 상품을 확인하려면 이 목록(`state=current`)을 쓰거나, 등록 응답의
+  `auctionId`로 경매 상세(`GET /api/auctions/{auctionId}`)를 엽니다.
+
+### Request
+
+**인증: 로그인 필수.** 판매자는 인증된 현재 사용자이며 요청으로 다른 판매자를 지정할 수 없습니다. dev/prod는
+`Authorization: Bearer {accessToken}`(`X-User-Id` 헤더는 무시), local은 mock `X-User-Id`.
+
+| Query | Type | 기본 | 허용 | 설명 |
+| --- | --- | --- | --- | --- |
+| `state` | String | `current` | `current` / `past` | `current` = `SCHEDULED`(시작 예정)·`LIVE`(진행 중), `past` = `ENDED`·`CANCELED` |
+| `page` | Int | `0` | `0` 이상 | 0부터 |
+| `size` | Int | `20` | `1`~`50` | |
+
+- `past`는 결제가 끝난 판매만이 아닙니다. 낙찰된 경매, **유찰**(입찰 없이 종료), **취소된 경매**가 모두 포함됩니다.
+- 정렬: 경매 생성 시각 최신순 → 같으면 경매 ID 내림차순.
+
+```http
+GET /api/me/selling-auctions?state=current&page=0&size=20
+Authorization: Bearer {accessToken}
+```
+
+### Response — 200 OK
+
+| 이름 | Type | null | 설명 |
+| --- | --- | --- | --- |
+| `items` | Array | X | 경매 카드 목록. 비어 있을 수 있음 |
+| `items[].auctionId` | Long | X | 경매 ID |
+| `items[].productId` | Long | X | 상품 ID (재경매 이력은 같은 `productId`를 가진 여러 카드로 나옴) |
+| `items[].brand` | String | O | 브랜드 |
+| `items[].name` | String | X | 상품 표시명(`brand + modelName + color`, 경매 상세 `product.name`과 같은 규칙) |
+| `items[].thumbnailUrl` | String | O | 대표 이미지(상품 첫 이미지)의 24시간 서명 URL. 응답마다 새로 서명되므로 저장하지 말 것. 이미지가 없으면 `null` |
+| `items[].status` | String | X | `SCHEDULED` / `LIVE` / `ENDED` / `CANCELED` |
+| `items[].grade` | String | O | 상품 등급(저장된 값 그대로) |
+| `items[].startPrice` | Long | X | 경매 시작가 |
+| `items[].currentPrice` | Long | X | 경매 현재가. 진행 중이면 현재 최고가, 종료 경매면 종료 시점 최고가, 입찰이 없었거나 취소된 경매면 `startPrice`와 같음 |
+| `items[].likeCount` | Int | X | 관심 수(전체 사용자 기준) |
+| `items[].isLiked` | Boolean | X | 로그인 사용자(판매자 본인)가 이 경매에 실제로 관심을 눌렀는지. 판매자라고 고정하지 않음 |
+| `page` | Int | X | 요청한 페이지 번호 |
+| `size` | Int | X | 요청한 페이지 크기 |
+| `hasNext` | Boolean | X | 다음 페이지 존재 여부 |
+
+**`currentPrice`는 실제 판매 금액이 아닙니다.** 경매 가격일 뿐이며, 낙찰자가 결제했는지·포기해 차순위 구매자가 다른 금액으로
+샀는지는 반영되지 않습니다. 이 목록에는 주문 상태·실제 판매 금액·판매 통계·배송 정보가 없습니다.
+
+```json
+{
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "auctionId": 52,
+        "productId": 21,
+        "brand": "Nike",
+        "name": "Nike Dunk Low Panda",
+        "thumbnailUrl": "https://{bucket}.s3.ap-northeast-2.amazonaws.com/{key}?X-Amz-...",
+        "status": "LIVE",
+        "grade": "A",
+        "startPrice": 10000,
+        "currentPrice": 25000,
+        "likeCount": 2,
+        "isLiked": false
+      }
+    ],
+    "page": 0,
+    "size": 20,
+    "hasNext": false
+  },
+  "error": null
+}
+```
+
+빈 결과와 마지막 페이지를 넘긴 `page`도 `200`입니다.
+
+```json
+{ "success": true, "data": { "items": [], "page": 0, "size": 20, "hasNext": false }, "error": null }
+```
+
+### Failure
+
+| HTTP | code | 상황 |
+| --- | --- | --- |
+| 400 | 40001 | `state`가 `current`/`past`가 아님, `page` < 0, `size`가 1~50 밖, `page`/`size`가 숫자가 아님 |
+| 401 | 40101 | 미인증 |
+
+```json
+{ "success": false, "data": null, "error": { "code": 40001, "message": "state는 current 또는 past여야 합니다. 요청값: sold" } }
+```
+
 ## GET /api/me/likes — 관심 경매 목록
 
 내가 관심 등록한 경매입니다. **종료·취소된 경매도 그대로 나옵니다**(사용자가 저장한 목록이라 상태로 숨기지 않음 — 카드의 `status`로 표시).
@@ -1998,7 +2123,7 @@ Authorization: Bearer {accessToken}
 
 | HTTP | code | 상황 (`/api/me/auctions`, `/api/me/likes` 공통) |
 | --- | --- | --- |
-| 400 | 40001 | `page` < 0, `size`가 1~50 밖, `page`/`size`가 숫자가 아님, (`/auctions`) `state`가 current/past가 아님 |
+| 400 | 40001 | `page` < 0, `size`가 1~50 밖, `page`/`size`가 숫자가 아님, (`/auctions`·`/selling-auctions`) `state`가 current/past가 아님 |
 | 401 | 40101 | 미인증 |
 
 ---

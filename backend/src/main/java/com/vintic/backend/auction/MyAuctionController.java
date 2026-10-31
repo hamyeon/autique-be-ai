@@ -41,6 +41,20 @@ public class MyAuctionController {
                 myAuctionQueryService.getMyParticipatedAuctions(userId, state, page, size)));
     }
 
+    @Operation(summary = "내가 판매 등록한 경매", description = "내가 판매자인 상품의 경매(경매 단위, 재경매 이력 포함). "
+            + "state=current(SCHEDULED/LIVE, 기본) | past(ENDED/CANCELED). "
+            + "경매 생성 시각 최신순 -> 경매 ID 내림차순. page 기본 0, size 기본 20, 최대 50.")
+    @GetMapping("/selling-auctions")
+    public ResponseEntity<ApiResponse<AuctionListResponse>> getMySellingAuctions(
+            @RequestAttribute("currentUserId") Long userId,
+            @RequestParam(defaultValue = "current") String state,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "" + AuctionListQueryService.DEFAULT_PAGE_SIZE) int size
+    ) {
+        return ResponseEntity.ok(ApiResponse.success(
+                myAuctionQueryService.getMySellingAuctions(userId, state, page, size)));
+    }
+
     @Operation(summary = "내 관심 경매", description = "관심 등록 시각 최신순 -> 관심 ID 내림차순. 종료·취소 경매도 포함한다. "
             + "page 기본 0, size 기본 20, 최대 50.")
     @GetMapping("/likes")
