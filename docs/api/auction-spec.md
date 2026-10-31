@@ -378,9 +378,9 @@ Purchase Agent(구매 에이전트)가 사용자를 대신해 어떤 경매에 �
 
 | HTTP | code | symbolic | message | 의미 | 상태 |
 | --- | --- | --- | --- | --- | --- |
-| 400 | 40001 | `INVALID_REQUEST` | 유효하지 않은 요청입니다. | 파라미터/바디 검증 실패 | 기존 |
+| 400 | 40001 | `INVALID_REQUEST` | 유효하지 않은 요청입니다. | 파라미터/바디 검증 실패(Bean Validation), 목록 `page`/`size`/`limit`/`state` 범위 오류, 요청 형식 오류(잘못된 JSON·본문 필드 타입, 경로 변수·쿼리 파라미터 타입 변환 실패 — #147) | 기존 |
 | 400 | 40004 | `IDEMPOTENCY_KEY_MISSING` | Idempotency-Key 헤더가 필요합니다. | 필수 헤더 누락 | 기존 |
-| 400 | 40006 | `INVALID_AUCTION_TIME` | 경매 시간 설정이 올바르지 않습니다. | 재경매 start/end 시각 유효성 | 신규(freeze 이후) |
+| 400 | 40006 | `INVALID_AUCTION_TIME` | 경매 시간 설정이 올바르지 않습니다. | 상품·첫 경매 등록(`POST /api/products`)과 재경매의 start/end 시각 유효성 | 신규(freeze 이후) |
 | 401 | 40101 | `UNAUTHORIZED` | 인증이 필요합니다. | 토큰 없음/만료 | 신규 |
 | 401 | 40102 | `KAKAO_TOKEN_INVALID` | Kakao access token이 유효하지 않습니다. | Kakao가 해당 access token을 invalid/expired로 판단(신원 확인 실패), `POST /api/auth/kakao` 전용(#75) | 신규 |
 | 401 | 40103 | `REFRESH_TOKEN_INVALID` | 유효하지 않은 Refresh Token입니다. | malformed/서명 불일치/만료/Access token 오사용/Redis entry 없음(revoked)/Redis userId 불일치. `POST /api/auth/refresh`·`POST /api/auth/logout` 전용(#75-4D). logout은 예외 - 토큰 자체가 유효한데 Redis entry만 없으면 이미 로그아웃된 것으로 보고 200 | 신규 |
@@ -403,7 +403,7 @@ Purchase Agent(구매 에이전트)가 사용자를 대신해 어떤 경매에 �
 | 409 | 40906 | `CAP_TOO_LOW` | 자동입찰 상한가가 너무 낮습니다. | `minCapAmount` 미만 | 신규 |
 | 409 | 40907 | `CAP_NOT_INCREASED` | 상한가는 현재 설정값보다 높아야 합니다. | **`ACTIVE`** **/** **`CAP_REACHED`에서만 발생** | 신규 |
 | 409 | 40908 | `AUTO_BID_ALREADY_EXISTS` | 이미 자동입찰이 등록되어 있습니다. | 중복 등록 | 신규 |
-| 409 | 40909 | `CONCURRENT_CONFLICT` | 처리가 지연되었습니다. 다시 시도해 주세요. | lock timeout / 동시성 충돌. **재시도 가능** | 신규 |
+| 409 | 40909 | `CONCURRENT_CONFLICT` | 다른 요청과 충돌이 발생했습니다. 잠시 후 다시 시도해주세요. | lock timeout / 동시성 충돌. **재시도 가능** | 신규 |
 | 409 | 40910 | `PAYMENT_EXPIRED` | 결제 기한이 만료되었습니다. |  | 신규 |
 | 409 | 40911 | `BACKUP_OFFER_EXPIRED` | 차순위 구매 기한이 만료되었습니다. |  | 신규 |
 | 409 | 40912 | `BACKUP_OFFER_ALREADY_RESOLVED` | 이미 처리된 제안입니다. | 수락/거절 완료 후 재요청 | 신규 |
@@ -417,7 +417,14 @@ Purchase Agent(구매 에이전트)가 사용자를 대신해 어떤 경매에 �
 | 409 | 40920 | `AUCTION_NOT_ELIGIBLE_FOR_REREGISTRATION` | 재경매할 수 없는 경매입니다. | 재경매 — 실제 입찰이 있던 경매 | 신규(freeze 이후) |
 | 409 | 40921 | `AUCTION_CANCEL_WINDOW_CLOSED` | 취소할 수 없는 경매입니다. | 경매 취소 — 이미 시작/비 SCHEDULED | 신규(freeze 이후) |
 | 409 | 40922 | `START_PRICE_CHANGE_WINDOW_CLOSED` | 시작가를 변경할 수 없는 경매입니다. | 시작가 수정 — 시작 1시간 전 이후 | 신규(freeze 이후) |
+| 405 | 40501 | `METHOD_NOT_ALLOWED` | 지원하지 않는 HTTP 메서드입니다. | 경로는 있지만 메서드가 다름. 응답 `Allow` 헤더에 허용 메서드(#147) | 신규(#147) |
+| 415 | 41501 | `UNSUPPORTED_MEDIA_TYPE` | 지원하지 않는 Content-Type입니다. | 요청 `Content-Type`을 받지 않는 API(#147) | 신규(#147) |
 | 502 | 50201 | `KAKAO_API_ERROR` | Kakao 사용자 정보 조회에 실패했습니다. | Kakao 5xx/timeout/network 등 upstream 실패(내부 payload 미노출), `POST /api/auth/kakao` 전용(#75) | 신규 |
+
+> **`message` 열은 대표 문구다.** 대부분의 오류는 발생 지점의 설명(대상 ID 등)을 그대로 담으므로 실제 문구가 다를 수 있다
+> (고정 문구는 `40909`, `40501`, `41501`, 요청 형식 오류의 `40001` 등 일부). **FE는 `code`로 분기**한다.
+> `symbolic`은 문서용 이름이며 응답에 포함되지 않는다(응답은 `success`/`data`/`error.code`/`error.message`).
+>
 
 > **번호 배정 원칙** `40001`, `40004`, `403xx`, `409xx` 중 “기존” 표시 항목은 현재 서버 구현 번호를 그대로 유지한다. 특히 `40905 IDEMPOTENCY_PAYLOAD_MISMATCH`는 이미 구현되어 있으므로 변경하지 않고, 신규 코드를 `40906`부터 뒤로 배정했다. `502xx`는 이번(#75)에 처음 쓰인 HTTP status 계열이다 - 기존 계열(`400xx`~`409xx`)과 동일하게 HTTP status를 그대로 앞 3자리로 사용한다.
 >

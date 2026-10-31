@@ -51,6 +51,18 @@ public class MyAuctionQueryService {
                 auctionCardAssembler.toCards(slice.getContent(), userId), page, size, slice.hasNext());
     }
 
+    // #147: "판매 경매" = 내가 판매 등록한 상품의 경매(참여 여부와 무관). state·page·size·정렬 규칙은
+    // 참여 경매와 같다. past는 낙찰·결제 여부와 무관하게 ENDED(유찰 포함)·CANCELED 전부다.
+    // isLiked는 판매자 본인의 실제 관심 여부다(판매자라고 고정하지 않는다).
+    @Transactional(readOnly = true)
+    public AuctionListResponse getMySellingAuctions(Long userId, String state, int page, int size) {
+        List<AuctionStatus> statuses = statusesOf(state);
+        AuctionListQueryService.validatePage(page, size);
+        Slice<Auction> slice = auctionRepository.findBySellerAndStatuses(userId, statuses, PageRequest.of(page, size));
+        return new AuctionListResponse(
+                auctionCardAssembler.toCards(slice.getContent(), userId), page, size, slice.hasNext());
+    }
+
     // 관심 목록. 관심 등록 시각 최신순(같으면 관심 id 내림차순). 경매 상태와 무관하게 전부 보여준다.
     // 1) 관심 경매 id를 페이지로 읽고 2) 그 경매들을 product와 함께 한 번에 읽어 3) 1)의 순서로 다시 맞춘다.
     @Transactional(readOnly = true)

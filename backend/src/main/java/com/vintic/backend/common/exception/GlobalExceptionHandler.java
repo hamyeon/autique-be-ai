@@ -3,13 +3,20 @@ package com.vintic.backend.common.exception;
 import com.vintic.backend.common.auth.mock.MockAuthException;
 import com.vintic.backend.common.dto.ApiResponse;
 import org.springframework.dao.PessimisticLockingFailureException;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
+
+import java.util.Set;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -28,6 +35,43 @@ public class GlobalExceptionHandler {
         return ResponseEntity
                 .status(HttpStatus.BAD_REQUEST)
                 .body(ApiResponse.fail(40001, message));
+    }
+
+    // #147: Spring이 요청을 해석하다 실패한 경우. 전용 처리기가 없으면 아래 catch-all(500/50001)로 떨어져
+    // 클라이언트 실수가 서버 오류로 보이고 내부 파싱 예외 원문이 노출됐다. 이 4종만 좁게 잡는다 -
+    // IllegalArgumentException 같은 일반 예외는 그대로 catch-all에 두어 실제 서버 결함을 숨기지 않는다.
+    // 메시지는 고정 문구다(예외 원문에 내부 클래스명·파서 메시지가 섞여 있어 그대로 내보내지 않는다).
+
+    // 잘못된 JSON, 읽을 수 없는 본문, 날짜·숫자 등 필드 타입이 맞지 않는 본문
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ApiResponse<Void>> handleHttpMessageNotReadable(HttpMessageNotReadableException e) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.fail(40001, "요청 본문 형식이 올바르지 않습니다."));
+    }
+
+    // 경로 변수·쿼리 파라미터 타입 변환 실패(예: /api/purchase-goals/abc, ?page=abc). AuctionListController·
+    // MyAuctionController는 자체 처리기(같은 400/40001, 파라미터 이름을 담은 메시지)가 먼저 적용된다.
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMethodArgumentTypeMismatch(MethodArgumentTypeMismatchException e) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.fail(40001, "요청 값의 형식이 올바르지 않습니다."));
+    }
+
+    // 경로는 있지만 HTTP 메서드가 다름. 표준대로 Allow 헤더에 허용 메서드를 담는다.
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ApiResponse<Void>> handleHttpRequestMethodNotSupported(HttpRequestMethodNotSupportedException e) {
+        ResponseEntity.BodyBuilder builder = ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED);
+        Set<HttpMethod> supported = e.getSupportedHttpMethods();
+        if (supported != null && !supported.isEmpty()) {
+            builder.allow(supported.toArray(HttpMethod[]::new));
+        }
+        return builder.body(ApiResponse.fail(40501, "지원하지 않는 HTTP 메서드입니다."));
+    }
+
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<ApiResponse<Void>> handleHttpMediaTypeNotSupported(HttpMediaTypeNotSupportedException e) {
+        return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
+                .body(ApiResponse.fail(41501, "지원하지 않는 Content-Type입니다."));
     }
 
     // mock 인증 실패: X-User-Id 헤더 누락/형식 오류/존재하지 않는 사용자 (401 Unauthorized)

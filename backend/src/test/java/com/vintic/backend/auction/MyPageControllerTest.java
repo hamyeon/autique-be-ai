@@ -67,8 +67,8 @@ class MyPageControllerTest {
     // ===== 인증 =====
 
     @Test
-    void 토큰이_없으면_세_API_모두_401_40101이다() throws Exception {
-        for (String url : List.of("/api/me", "/api/me/auctions", "/api/me/likes")) {
+    void 토큰이_없으면_마이페이지_API_모두_401_40101이다() throws Exception {
+        for (String url : List.of("/api/me", "/api/me/auctions", "/api/me/selling-auctions", "/api/me/likes")) {
             mockMvc.perform(get(url))
                     .andExpect(status().isUnauthorized())
                     .andExpect(jsonPath("$.error.code").value(40101));
@@ -152,6 +152,62 @@ class MyPageControllerTest {
     @Test
     void 나의_경매_size가_숫자가_아니면_400_40001이다() throws Exception {
         mockMvc.perform(get("/api/me/auctions").param("size", "ten").header("Authorization", bearer(5L)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value(40001));
+        verifyNoInteractions(myAuctionQueryService);
+    }
+
+    // ===== GET /api/me/selling-auctions (#147) =====
+
+    @Test
+    void 판매_경매는_JWT_사용자로_state_current_page_0_size_20_기본값으로_조회된다() throws Exception {
+        when(myAuctionQueryService.getMySellingAuctions(5L, "current", 0, 20)).thenReturn(oneCard());
+
+        mockMvc.perform(get("/api/me/selling-auctions").header("Authorization", bearer(5L)).header("X-User-Id", "999"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].auctionId").value(30))
+                .andExpect(jsonPath("$.data.items[0].productId").value(20))
+                .andExpect(jsonPath("$.data.items[0].brand").value("Nike"))
+                .andExpect(jsonPath("$.data.items[0].name").value("Nike Dunk Low Panda"))
+                .andExpect(jsonPath("$.data.items[0].thumbnailUrl").value("https://signed.example.com/a.jpg"))
+                .andExpect(jsonPath("$.data.items[0].status").value("ENDED"))
+                .andExpect(jsonPath("$.data.items[0].grade").value("A"))
+                .andExpect(jsonPath("$.data.items[0].startPrice").value(10000))
+                .andExpect(jsonPath("$.data.items[0].currentPrice").value(25000))
+                .andExpect(jsonPath("$.data.items[0].likeCount").value(2))
+                .andExpect(jsonPath("$.data.items[0].isLiked").value(true))
+                .andExpect(jsonPath("$.data.page").value(0))
+                .andExpect(jsonPath("$.data.size").value(20))
+                .andExpect(jsonPath("$.data.hasNext").value(false));
+
+        verify(myAuctionQueryService).getMySellingAuctions(5L, "current", 0, 20);
+    }
+
+    @Test
+    void 판매_경매는_요청한_state_page_size로_조회된다() throws Exception {
+        when(myAuctionQueryService.getMySellingAuctions(5L, "past", 2, 10))
+                .thenReturn(new AuctionListResponse(List.of(), 2, 10, false));
+
+        mockMvc.perform(get("/api/me/selling-auctions").param("state", "past").param("page", "2").param("size", "10")
+                        .header("Authorization", bearer(5L)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items").isEmpty())
+                .andExpect(jsonPath("$.data.hasNext").value(false));
+    }
+
+    @Test
+    void 판매_경매_state가_잘못되면_400_40001이다() throws Exception {
+        when(myAuctionQueryService.getMySellingAuctions(5L, "sold", 0, 20))
+                .thenThrow(new InvalidPageRequestException("state는 current 또는 past여야 합니다. 요청값: sold"));
+
+        mockMvc.perform(get("/api/me/selling-auctions").param("state", "sold").header("Authorization", bearer(5L)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value(40001));
+    }
+
+    @Test
+    void 판매_경매_page가_숫자가_아니면_400_40001이다() throws Exception {
+        mockMvc.perform(get("/api/me/selling-auctions").param("page", "first").header("Authorization", bearer(5L)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value(40001));
         verifyNoInteractions(myAuctionQueryService);
