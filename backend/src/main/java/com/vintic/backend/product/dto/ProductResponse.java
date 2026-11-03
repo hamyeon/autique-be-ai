@@ -18,6 +18,8 @@ public record ProductResponse(
         List<String> imageUrls,
         String brand,
         String modelName,
+        // 한국어 상품명. 없으면 null - 영문명(brand modelName color)만 보여준다.
+        String nameKo,
         String color,
         Integer size,
         String conditionGrade,
@@ -51,6 +53,7 @@ public record ProductResponse(
                 presignedImageUrls,
                 product.getBrand(),
                 product.getModel(),
+                product.getNameKo(),
                 product.getColorway(),
                 product.getSizeKr(),
                 product.getConditionGrade(),

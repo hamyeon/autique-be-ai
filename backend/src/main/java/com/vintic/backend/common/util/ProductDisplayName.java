@@ -8,21 +8,38 @@ import com.vintic.backend.product.domain.Product;
 // 구조화 필드만 조합한다 - subName은 브랜드를 뺀 model만 재사용한다(모델명이 라틴 문자로
 // 저장되는 경우가 많다는 관찰에 근거하되, 실제 영문명 컬럼은 아니다). 전용 name/subName 컬럼
 // 도입 여부는 #55 완료 보고의 gap 항목으로 남긴다 - 이 클래스가 그 gap의 임시 근사치다.
+//
+// 한국어 상품명(Product.nameKo)이 생긴 뒤로는: 있으면 name은 한국어명, subName은 영문 전체명
+// (brand model colorway)이다 - 화면의 큰 글씨/작은 글씨 자리다. 없으면 예전 규칙 그대로다.
 public final class ProductDisplayName {
 
     private ProductDisplayName() {
     }
 
     public static String name(Product product) {
+        if (hasNameKo(product)) {
+            return product.getNameKo().trim();
+        }
+        return englishName(product);
+    }
+
+    public static String subName(Product product) {
+        if (hasNameKo(product)) {
+            return englishName(product);
+        }
+        return product.getModel();
+    }
+
+    private static boolean hasNameKo(Product product) {
+        return product.getNameKo() != null && !product.getNameKo().isBlank();
+    }
+
+    private static String englishName(Product product) {
         StringBuilder sb = new StringBuilder();
         appendIfPresent(sb, product.getBrand());
         appendIfPresent(sb, product.getModel());
         appendIfPresent(sb, product.getColorway());
         return sb.toString();
-    }
-
-    public static String subName(Product product) {
-        return product.getModel();
     }
 
     private static void appendIfPresent(StringBuilder sb, String value) {

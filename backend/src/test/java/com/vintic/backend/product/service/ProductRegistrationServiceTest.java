@@ -1,6 +1,7 @@
 package com.vintic.backend.product.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.vintic.backend.ai.naming.KoreanProductNameResolver;
 import com.vintic.backend.ai.vision.dto.ConditionGrade;
 import com.vintic.backend.ai.vision.dto.VisionAnalysisResult;
 import com.vintic.backend.analyze.domain.ProductAnalysisSession;
@@ -70,6 +71,9 @@ class ProductRegistrationServiceTest {
     @Mock
     private S3UrlPresigner s3UrlPresigner;
 
+    @Mock
+    private KoreanProductNameResolver koreanNameResolver;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     private ProductRegistrationService sut;
@@ -88,7 +92,7 @@ class ProductRegistrationServiceTest {
         lenient().when(s3UrlPresigner.presign(anyString(), any())).thenAnswer(invocation -> invocation.getArgument(0));
         sut = new ProductRegistrationService(
                 productRepository, userRepository, productVectorService, auctionRepository, sessionRepository,
-                FIXED_CLOCK, s3UrlPresigner, objectMapper
+                FIXED_CLOCK, s3UrlPresigner, objectMapper, koreanNameResolver
         );
     }
 
@@ -263,6 +267,31 @@ class ProductRegistrationServiceTest {
         sut.createProduct(requestWith(null, null, "   "), 1L);
 
         assertThat(savedProduct().getConditionDescription()).isEqualTo("AI가 본 상태입니다.");
+    }
+
+    // ===== 한국어 상품명 =====
+
+    @Test
+    void 판매자가_확정한_브랜드_모델명_색상으로_정한_한국어_상품명이_저장된다() {
+        initSut();
+        stubHappyPath();
+        when(koreanNameResolver.resolve("Nike", "Dunk Low", "Panda")).thenReturn("나이키 덩크 로우 판다");
+
+        ProductResponse response = sut.createProduct(request, 1L);
+
+        assertThat(savedProduct().getNameKo()).isEqualTo("나이키 덩크 로우 판다");
+        assertThat(response.nameKo()).isEqualTo("나이키 덩크 로우 판다");
+    }
+
+    @Test
+    void 한국어_상품명을_정하지_못해도_등록은_진행되고_null로_저장된다() {
+        initSut();
+        stubHappyPath();
+        when(koreanNameResolver.resolve(any(), any(), any())).thenReturn(null);
+
+        sut.createProduct(request, 1L);
+
+        assertThat(savedProduct().getNameKo()).isNull();
     }
 
     @Test

@@ -88,7 +88,7 @@ class ProductControllerTest {
                 10000L, startAt, endAt
         );
         ProductResponse response = new ProductResponse(
-                1L, 1L, request.imageUrls(), request.brand(), request.modelName(), request.color(),
+                1L, 1L, request.imageUrls(), request.brand(), request.modelName(), null, request.color(),
                 request.size(), request.conditionGrade(), request.componentStatus(), request.recommendedPrice(),
                 request.baseMarketPrice(), request.priceRange(), request.sellingPrice(), request.reason(),
                 request.sellerDescription(), null,
@@ -123,7 +123,7 @@ class ProductControllerTest {
                 }
                 """.formatted(startAt, endAt);
         ProductResponse response = new ProductResponse(
-                1L, 1L, List.of("https://example.com/a.jpg"), "Nike", "Dunk Low", "Panda",
+                1L, 1L, List.of("https://example.com/a.jpg"), "Nike", "Dunk Low", "나이키 덩크 로우 판다", "Panda",
                 270, "B", "PARTIAL", 300000, null, null, 290000, null, null, null,
                 100L, "SCHEDULED", 10000L, 5000L, startAt, endAt
         );
@@ -134,7 +134,8 @@ class ProductControllerTest {
                         .content(body)
                         .requestAttr("currentUserId", 1L))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.success").value(true));
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.nameKo").value("나이키 덩크 로우 판다"));
     }
 
     @Test

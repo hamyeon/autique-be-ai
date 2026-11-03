@@ -36,6 +36,11 @@ public class Product {
     private String brand;
     private String model;
     private String colorway;
+
+    // 한국어 상품명(KoreanProductNameResolver). brand/model/colorway를 합친 한 줄이다(예: "아식스 노바블라스트 6 블랙").
+    // 이름을 만들지 못했거나 이 컬럼이 생기기 전에 등록된 상품은 null이다 - 화면은 영문명만 보여준다(ProductDisplayName).
+    @Column(name = "name_ko", length = 300)
+    private String nameKo;
     private Integer sizeKr;
     private String conditionGrade;
     private String componentStatus;
@@ -83,6 +88,7 @@ public class Product {
                 recommendedPrice, baseMarketPrice, priceRange, finalPrice, reason, description, null);
     }
 
+    // 한국어 상품명 없이 만드는 생성자. 위 생성자와 같은 이유로 남긴다.
     public Product(
             User seller,
             List<String> imageUrls,
@@ -100,11 +106,34 @@ public class Product {
             String description,
             String conditionDescription
     ) {
+        this(seller, imageUrls, brand, model, colorway, sizeKr, conditionGrade, componentStatus,
+                recommendedPrice, baseMarketPrice, priceRange, finalPrice, reason, description, conditionDescription, null);
+    }
+
+    public Product(
+            User seller,
+            List<String> imageUrls,
+            String brand,
+            String model,
+            String colorway,
+            Integer sizeKr,
+            String conditionGrade,
+            String componentStatus,
+            Integer recommendedPrice,
+            Integer baseMarketPrice,
+            String priceRange,
+            Integer finalPrice,
+            String reason,
+            String description,
+            String conditionDescription,
+            String nameKo
+    ) {
         this.seller = seller;
         this.imageUrls = new ArrayList<>(imageUrls);
         this.brand = brand;
         this.model = model;
         this.colorway = colorway;
+        this.nameKo = nameKo;
         this.sizeKr = sizeKr;
         this.conditionGrade = conditionGrade;
         this.componentStatus = componentStatus;
@@ -140,6 +169,10 @@ public class Product {
 
     public String getColorway() {
         return colorway;
+    }
+
+    public String getNameKo() {
+        return nameKo;
     }
 
     public Integer getSizeKr() {

@@ -45,6 +45,15 @@ class MarketPriceDataLoaderTest {
     }
 
     @Test
+    void 실제_CSV에서_크림_상품명을_컬러웨이와_함께_읽는다() {
+        // 한국어 상품명(KoreanProductNameResolver)이 이 값을 쓴다. 크롤러가 넣은 행은 한국어다.
+        List<MarketPriceDataLoader.KreamProductName> names = loader.loadKreamProductNames();
+
+        assertThat(names).contains(new MarketPriceDataLoader.KreamProductName(
+                "Nike", "V2K Run", "Black Anthracite", "나이키 V2K 런 블랙 앤트러사이트"));
+    }
+
+    @Test
     void 실제_CSV의_모든_행이_유효한_사이즈를_갖는다() {
         // 사이즈가 깨진 행은 매칭이 안 돼 결과적으로 참조에서 빠진다.
         // 로딩 단계에서 걸러지는지 확인한다.

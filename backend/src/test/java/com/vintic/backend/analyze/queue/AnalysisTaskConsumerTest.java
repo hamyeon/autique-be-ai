@@ -1,6 +1,7 @@
 package com.vintic.backend.analyze.queue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.vintic.backend.ai.naming.KoreanProductNameResolver;
 import com.vintic.backend.ai.vision.dto.ConditionGrade;
 import com.vintic.backend.ai.vision.dto.VisionAnalysisResult;
 import com.vintic.backend.ai.vision.dto.VisionProgress;
@@ -58,6 +59,9 @@ class AnalysisTaskConsumerTest {
 
     @Mock
     private VisionAnalysisService visionAnalysisService;
+
+    @Mock
+    private KoreanProductNameResolver koreanNameResolver;
 
     @Mock
     private VisionAttemptCoordinator coordinator;
@@ -120,7 +124,7 @@ class AnalysisTaskConsumerTest {
                 visionAnalysisService, coordinator, failureRecorder, progressRecorder,
                 failureStreamRecorder, failureStreamProducer,
                 failureClassifier, metrics, objectMapper, redisTemplate, properties,
-                visionProperties, executor, s3UrlPresigner
+                visionProperties, executor, s3UrlPresigner, koreanNameResolver
 
         );
     }
@@ -170,6 +174,9 @@ class AnalysisTaskConsumerTest {
         newConsumer().onMessage(recordFor(1L, imageUrls));
 
         verify(streamOperations).acknowledge(eq(properties.getKey()), eq(properties.getGroup()), eq(RecordId.of("1-0")));
+        // 분석 화면이 결과와 함께 한국어 상품명을 볼 수 있게 완료 전에 이름을 정해 둔다
+        VisionAnalysisResult result = sampleResult();
+        verify(koreanNameResolver).resolve(result.brand(), result.modelName(), result.color());
     }
 
     @Test

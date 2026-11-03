@@ -586,6 +586,7 @@ Vision 분석 과정에서 충분한 근거를 확인하지 못한 항목은 `nu
     "preliminary": null,
     "brand": "Nike",
     "modelName": "Dunk Low",
+    "nameKo": "나이키 덩크 로우 판다",
     "color": "Panda",
     "size": 270,
     "boxIncluded": true,
@@ -646,6 +647,7 @@ UNKNOWN`은 그대로 보내도 되고 사용자가 고른 등급으로 바꿔 �
 | `preliminary` | 객체 | `VISION_PROCESSING` 중 잠정 결과 (`brand`, `modelName`, `color`, `size`). 최종 결과가 아니며 바뀔 수 있음. 그 밖의 상태이거나 ①단계 전이면 `null` |
 | `brand` | `String` | AI가 인식한 브랜드. 근거가 부족하면 `null` |
 | `modelName` | `String` | AI가 인식한 모델명. 근거가 부족하면 `null` |
+| `nameKo` | `String` | 한국어 상품명(brand·modelName·color를 합친 한 줄, KREAM 표기). 분석 중이거나 만들지 못했으면 `null` — 영문만 표시. 상세는 [`korean-product-name.md`](korean-product-name.md) |
 | `color` | `String` | AI가 인식한 컬러웨이. 근거가 부족하면 `null` |
 | `size` | `Integer` | 한국 신발 사이즈(mm 단위, 예: `270`) |
 | `boxIncluded` | `Boolean` | 박스 포함 여부 |
@@ -1337,6 +1339,10 @@ POST /api/products                   (아래 본문 — imageUrls 없음)
 `bidIncrement`, `auctionStartAt`, `auctionEndAt`)을 반환합니다. `imageUrls`는 위 규칙으로 결정된 상품
 이미지를 24시간 서명 URL로 바꾼 값입니다. 경매 상세 조회는 `GET /api/auctions/{auctionId}`
 (auction-spec §1)로 이어집니다. 내가 등록한 상품·경매 목록은 `GET /api/me/selling-auctions`(#147)로 조회합니다.
+
+응답의 `nameKo`는 서버가 요청의 `brand`·`modelName`·`color`로 정해 저장한 한국어 상품명입니다(요청으로 받지 않음).
+분석 값을 고쳐 등록하면 이때 새로 만들어 응답이 1~2초 늦어질 수 있고, 만들지 못하면 `null`로 저장되며 등록은
+그대로 성공합니다([`korean-product-name.md`](korean-product-name.md)). `GET /api/products` 목록 항목에도 같은 `nameKo`가 있습니다.
 
 ### Failure
 

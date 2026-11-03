@@ -2,6 +2,7 @@ package com.vintic.backend.product.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.vintic.backend.ai.naming.KoreanProductNameResolver;
 import com.vintic.backend.ai.vision.dto.VisionAnalysisResult;
 import com.vintic.backend.analyze.domain.ProductAnalysisSession;
 import com.vintic.backend.analyze.domain.ProductAnalysisSessionRepository;
@@ -57,6 +58,7 @@ public class ProductRegistrationService {
     private final Clock clock;
     private final S3UrlPresigner s3UrlPresigner;
     private final ObjectMapper objectMapper;
+    private final KoreanProductNameResolver koreanNameResolver;
 
     public ProductRegistrationService(
             ProductRepository productRepository,
@@ -66,7 +68,8 @@ public class ProductRegistrationService {
             ProductAnalysisSessionRepository sessionRepository,
             Clock clock,
             S3UrlPresigner s3UrlPresigner,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            KoreanProductNameResolver koreanNameResolver
     ) {
         this.productRepository = productRepository;
         this.userRepository = userRepository;
@@ -76,12 +79,18 @@ public class ProductRegistrationService {
         this.clock = clock;
         this.s3UrlPresigner = s3UrlPresigner;
         this.objectMapper = objectMapper;
+        this.koreanNameResolver = koreanNameResolver;
     }
 
     @Transactional
     public ProductResponse createProduct(CreateProductRequest request, Long sellerId) {
         User seller = userRepository.findById(sellerId)
                 .orElseThrow(() -> new UserNotFoundException("존재하지 않는 사용자입니다: " + sellerId));
+
+        // 판매자가 확정한 값으로 한국어 상품명을 정한다. Vision 값 그대로면 분석 때 저장한 이름이 바로 나오고,
+        // 모델명·색상을 고쳤으면 여기서 번역(1~2초)한다. 세션 행 잠금을 잡기 전에 불러 잠금 시간을 늘리지 않는다.
+        // 실패하면 null이고 등록은 그대로 진행된다.
+        String nameKo = koreanNameResolver.resolve(request.brand(), request.modelName(), request.color());
 
         // #127: 세션을 잠근(findByIdForUpdate) 채로 소유권·취소 여부·중복 등록 여부를 확인하고
         // "등록에 확정 사용됨"으로 표시한다 - 이 메서드 전체가 하나의 트랜잭션이므로, 아래에서
@@ -115,7 +124,8 @@ public class ProductRegistrationService {
                 request.sellingPrice(),
                 request.reason(),
                 request.sellerDescription(),
-                resolveConditionDescription(session, request.conditionDescription())
+                resolveConditionDescription(session, request.conditionDescription()),
+                nameKo
         );
 
         Product savedProduct = productRepository.save(product);
