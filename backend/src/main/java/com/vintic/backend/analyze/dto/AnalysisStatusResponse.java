@@ -26,6 +26,9 @@ public record AnalysisStatusResponse(
         // 사용자가 확인/수정할 상품 정보
         String brand,
         String modelName,
+        // 한국어 상품명(예: "아식스 노바블라스트 6 블랙"). brand/modelName/color를 합친 한 줄이다.
+        // 아직 정해지지 않았거나 만들지 못했으면 null이고, 그때는 영문명만 보여준다. 분석 중(잠정 결과)에는 항상 null이다.
+        String nameKo,
         String color,
         Integer size,
         Boolean boxIncluded,

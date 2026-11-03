@@ -32,6 +32,38 @@ public class MarketPriceDataLoader {
         return loadRows(EBAY_CSV_PATH, "EBAY");
     }
 
+    // KREAM CSV의 상품명(KoreanProductNameResolver가 한국어 상품명으로 쓴다). 크롤러가 넣은 행은 한국어,
+    // 초기 수기 입력 행은 영문이라 한글 여부는 호출부가 거른다. 시세 행과 달리 사이즈·가격은 보지 않는다.
+    public List<KreamProductName> loadKreamProductNames() {
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(new ClassPathResource(KREAM_CSV_PATH).getInputStream(), StandardCharsets.UTF_8)
+        )) {
+            String headerLine = reader.readLine();
+            if (headerLine == null || headerLine.isBlank()) {
+                return List.of();
+            }
+            List<String> headers = parseCsvLine(headerLine);
+            List<KreamProductName> names = new ArrayList<>();
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.isBlank()) {
+                    continue;
+                }
+                List<String> values = parseCsvLine(line);
+                String brand = getValue(headers, values, "브랜드");
+                String model = getValue(headers, values, "모델명");
+                String colorway = getValue(headers, values, "컬러웨이");
+                String productName = getValue(headers, values, "상품명");
+                if (!isBlank(brand) && !isBlank(model) && !isBlank(colorway) && !isBlank(productName)) {
+                    names.add(new KreamProductName(brand, model, colorway, productName.trim()));
+                }
+            }
+            return names;
+        } catch (Exception e) {
+            throw new IllegalStateException("KREAM CSV 파일을 읽는 중 오류가 발생했습니다.", e);
+        }
+    }
+
     private List<MarketPriceRow> loadRows(String path, String source) {
         try {
             ClassPathResource resource = new ClassPathResource(path);
@@ -251,5 +283,8 @@ public class MarketPriceDataLoader {
             int price,
             String url
     ) {
+    }
+
+    public record KreamProductName(String brand, String model, String colorway, String productName) {
     }
 }

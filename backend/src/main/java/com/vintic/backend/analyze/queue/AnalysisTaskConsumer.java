@@ -1,6 +1,7 @@
 package com.vintic.backend.analyze.queue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.vintic.backend.ai.naming.KoreanProductNameResolver;
 import com.vintic.backend.ai.vision.dto.VisionAnalysisRequest;
 import com.vintic.backend.ai.vision.dto.VisionAnalysisResult;
 import com.vintic.backend.ai.vision.service.VisionAnalysisService;
@@ -82,6 +83,7 @@ public class AnalysisTaskConsumer implements StreamListener<String, MapRecord<St
     private final AnalysisVisionProcessingProperties visionProperties;
     private final ExecutorService visionAnalysisExecutor;
     private final S3UrlPresigner s3UrlPresigner;
+    private final KoreanProductNameResolver koreanNameResolver;
 
     private final AtomicInteger inFlight = new AtomicInteger();
 
@@ -196,6 +198,10 @@ public class AnalysisTaskConsumer implements StreamListener<String, MapRecord<St
             handleVisionFailure(record, sessionId, token, deliveryCount, visionError);
             return;
         }
+
+        // 분석 화면이 결과와 함께 한국어 상품명을 보여줄 수 있게, 완료로 바꾸기 전에 이름을 정해 저장해 둔다.
+        // 상태 조회는 저장된 이름만 읽는다(ProductAnalyzeService.getStatus). 실패해도 null로 끝나 분석은 그대로 완료된다.
+        koreanNameResolver.resolve(result.brand(), result.modelName(), result.color());
 
         if (tryCompleteVision(sessionId, token, result)) {
             acknowledge(record);

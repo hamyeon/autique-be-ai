@@ -489,16 +489,17 @@ Authorization: Bearer {accessToken}
 | —— productId | Long | 상품 ID | O |
 | —— name | String | 상품명 | O |
 | —— brand | String | 브랜드 | O |
-| —— subName | String | 모델명(`Product.model` 그대로 — 아래 "상품 표시명 규칙") | O |
+| —— subName | String | 작은 글씨 상품명. 한국어명이 있으면 영문 전체명, 없으면 모델명(아래 "상품 표시명 규칙") | O |
 | —— grade | String | 상품 등급. 등록 시 저장된 `conditionGrade` 문자열을 변환 없이 그대로 반환한다(A/B/C만 오는 것이 아니다 — `DS`/`S`/`UNKNOWN` 등도 올 수 있음, spec.md "상태 등급 정리" 참고) | O |
 | —— imageUrls | Array<String> | 상품 이미지 목록(조회마다 새로 서명한 24시간 유효 URL) | O |
 | —— conditionDescription | String | 상품 상태 설명 (#141). 등록 시 판매자가 수정해 보낸 값, 생략했으면 AI 분석의 상태 설명. 상위 `description`(판매자 설명)과 별개 값이다. **이 필드 도입 전에 등록된 상품, 또는 상태 설명 없이 등록된 상품은 `null`** — FE는 null이면 상태 설명 영역을 숨긴다 | X |
 
-**상품 표시명 규칙(`ProductDisplayName`, #141 정정).** Product에는 별도 상품명/영문명 컬럼이 없다.
-`name` = `brand` + `modelName` + `color`를 공백으로 이은 값(빈 값은 건너뜀, 각 값 trim), `subName` =
-등록 시 입력한 `modelName` 그대로다. 아래 예시의 한글/영문 상품명은 이 규칙으로 만들어지지 않는다 —
-실제 응답은 예: `name: "Nike Dunk Low Panda"`, `subName: "Dunk Low"`. 경매 결과·주문·차순위 응답의
-`product.name`/`subName`도 같은 규칙이다.
+**상품 표시명 규칙(`ProductDisplayName`).** 상품에 한국어 상품명(`Product.nameKo`, 등록 시 서버가 정함 —
+[`korean-product-name.md`](korean-product-name.md))이 있으면 `name` = 한국어명, `subName` = `brand` + `modelName`
++ `color`를 공백으로 이은 영문 전체명이다(예: `name: "나이키 덩크 로우 판다"`, `subName: "Nike Dunk Low Panda"`).
+한국어명이 없으면(만들지 못했거나 이 기능 이전에 등록된 상품) 예전 규칙 그대로 `name` = 영문 전체명, `subName` =
+`modelName`이다(예: `name: "Nike Dunk Low Panda"`, `subName: "Dunk Low"`). 경매 결과·주문·차순위 응답의
+`product.name`/`subName`과 경매 카드의 `name`도 같은 규칙이다.
 | — seller | Object | 판매자 정보 | O |
 | —— sellerId | Long | 판매자 ID | O |
 | —— nickname | String | 판매자 닉네임 (마스킹 없음) | O |

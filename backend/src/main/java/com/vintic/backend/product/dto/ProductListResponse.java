@@ -11,6 +11,8 @@ public record ProductListResponse(
         String thumbnailImageUrl,
         String brand,
         String modelName,
+        // 한국어 상품명. 없으면 null(ProductResponse.nameKo와 같다).
+        String nameKo,
         String conditionGrade,
         Integer sellingPrice,
         LocalDateTime createdAt
@@ -29,6 +31,7 @@ public record ProductListResponse(
                 thumbnailImageUrl,
                 product.getBrand(),
                 product.getModel(),
+                product.getNameKo(),
                 product.getConditionGrade(),
                 product.getFinalPrice(),
                 product.getCreatedAt()

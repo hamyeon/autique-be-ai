@@ -112,6 +112,15 @@ vision:
     max-edge: ${VISION_PHOTO_VIEW_MAX_EDGE:512}
     max-output-tokens: 100
 
+# 한국어 상품명(KoreanProductNameResolver). 저장된 이름 → 크림 상품명 → Haiku 번역 순으로 정한다.
+# 번역은 크림에 없는 신발에서 신발마다 한 번만 부른다. translation-enabled=false면 번역 없이 크림 이름만 쓴다.
+naming:
+  korean-name:
+    translation-enabled: ${NAMING_KOREAN_NAME_TRANSLATION_ENABLED:true}
+    model: ${NAMING_KOREAN_NAME_MODEL:claude-haiku-5-5}
+    prompt-version: v1
+    max-output-tokens: 100
+
 # Purchase Agent(#95) - 자연어 구매 목표 파서.
 # provider: openai(LLM + 실패 시 규칙 기반 fallback) | rule(규칙 기반만).
 # 하네스에서 LLM이 규칙 기반보다 낫다는 게 확인되기 전이거나 OpenAI 장애 시 rule로 내린다.

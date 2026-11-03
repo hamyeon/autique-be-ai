@@ -1,6 +1,7 @@
 package com.vintic.backend.concurrency;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.vintic.backend.ai.naming.KoreanProductNameResolver;
 import com.vintic.backend.ai.vision.dto.ConditionGrade;
 import com.vintic.backend.ai.vision.dto.VisionAnalysisResult;
 import com.vintic.backend.ai.vision.service.VisionAnalysisService;
@@ -186,7 +187,7 @@ class AnalysisStreamRecoveryEndToEndMySqlIT {
         AnalysisTaskConsumer consumer = new AnalysisTaskConsumer(
                 visionAnalysisService, coordinator, failureRecorder, mock(AnalysisProgressRecorder.class), failureStreamRecorder, failureStreamProducer,
                 new VisionFailureClassifier(), metrics, objectMapper, redisTemplate,
-                streamProperties, visionProperties, visionExecutor, s3UrlPresigner
+                streamProperties, visionProperties, visionExecutor, s3UrlPresigner, mock(KoreanProductNameResolver.class)
         );
         AnalysisStreamRecoveryScheduler scheduler = new AnalysisStreamRecoveryScheduler(
                 redisTemplate, streamProperties, recoveryProperties, consumer, metrics

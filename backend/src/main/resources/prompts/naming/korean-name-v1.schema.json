@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "required": ["nameKo"],
+  "additionalProperties": false,
+  "properties": {
+    "nameKo": {
+      "type": "string",
+      "description": "KREAM 표기를 따른 한국어 상품명 한 줄. 브랜드 모델명 색상 순서."
+    }
+  }
+}

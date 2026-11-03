@@ -2,6 +2,7 @@ package com.vintic.backend.analyze.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.vintic.backend.ai.naming.KoreanProductNameResolver;
 import com.vintic.backend.ai.vision.dto.VisionAnalysisResult;
 import com.vintic.backend.ai.vision.dto.VisionProgress;
 import com.vintic.backend.analyze.domain.AnalysisStatus;
@@ -57,6 +58,7 @@ public class ProductAnalyzeService {
     private final ObjectMapper objectMapper;
     private final S3UrlPresigner s3UrlPresigner;
     private final PhotoUsageCommitter photoUsageCommitter;
+    private final KoreanProductNameResolver koreanNameResolver;
 
     public AnalyzeAcceptedResponse submitForAnalysis(List<MultipartFile> imageFiles, Long userId) {
 
@@ -186,6 +188,8 @@ public class ProductAnalyzeService {
                                 progress.brand(), progress.modelName(), progress.color(), progress.size()),
                 vision.brand(),
                 vision.modelName(),
+                // 폴링되는 API라 번역을 부르지 않고 Worker가 완료 직전에 저장해 둔 이름만 읽는다(AnalysisTaskConsumer).
+                koreanNameResolver.findSaved(vision.brand(), vision.modelName(), vision.color()),
                 vision.color(),
                 vision.size(),
                 vision.boxIncluded(),
