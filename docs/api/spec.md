@@ -586,7 +586,6 @@ Vision 분석 과정에서 충분한 근거를 확인하지 못한 항목은 `nu
     "preliminary": null,
     "brand": "Nike",
     "modelName": "Dunk Low",
-    "nameKo": "나이키 덩크 로우 판다",
     "color": "Panda",
     "size": 270,
     "boxIncluded": true,
@@ -647,7 +646,6 @@ UNKNOWN`은 그대로 보내도 되고 사용자가 고른 등급으로 바꿔 �
 | `preliminary` | 객체 | `VISION_PROCESSING` 중 잠정 결과 (`brand`, `modelName`, `color`, `size`). 최종 결과가 아니며 바뀔 수 있음. 그 밖의 상태이거나 ①단계 전이면 `null` |
 | `brand` | `String` | AI가 인식한 브랜드. 근거가 부족하면 `null` |
 | `modelName` | `String` | AI가 인식한 모델명. 근거가 부족하면 `null` |
-| `nameKo` | `String` | 한국어 상품명(brand·modelName·color를 합친 한 줄, KREAM 표기). 분석 중이거나 만들지 못했으면 `null` — 영문만 표시. 상세는 [`korean-product-name.md`](korean-product-name.md) |
 | `color` | `String` | AI가 인식한 컬러웨이. 근거가 부족하면 `null` |
 | `size` | `Integer` | 한국 신발 사이즈(mm 단위, 예: `270`) |
 | `boxIncluded` | `Boolean` | 박스 포함 여부 |
@@ -900,7 +898,8 @@ Authorization: Bearer {accessToken}
     "priceRange": "25,000원 ~ 81,000원",
     "reason": "당근마켓·후르츠패밀리에 올라온 Dunk Low 중고 매물 116건을 근거로 계산했습니다. 실거래가 중앙값은 40,000원이고, 매물의 절반이 25,000원 ~ 81,000원 사이에 있습니다. 상품 상태 UNKNOWN(기타 상태)는 전체 매물 시세 대비 100% 수준으로 반영했습니다. 구성품이 모두 포함되어 있어 100% 반영률을 적용했습니다. 이를 바탕으로 최종 추천가는 40,000원이며, 판매 권장 범위는 실거래 분포를 따라 25,000원 ~ 81,000원입니다.",
     "kreamMatches": [],
-    "ebayMatches": []
+    "ebayMatches": [],
+    "nameKo": "나이키 덩크 로우 판다"
   },
   "error": null
 }
@@ -975,6 +974,7 @@ Authorization: Bearer {accessToken}
 | `reason` | `String` | 시세 및 상태 반영 기준을 포함한 추천가 산정 설명 |
 | `kreamMatches` | 객체 배열 | 추천가 계산에 사용된 KREAM 유사 거래 목록. 1순위 경로에서는 빈 배열 |
 | `ebayMatches` | 객체 배열 | eBay 유사 매물 목록(참고용). 1순위 경로에서는 빈 배열 |
+| `nameKo` | `String` | 요청의 확정 `brand`·`modelName`·`color`로 정한 한국어 상품명 한 줄(KREAM 표기, 예: `"나이키 덩크 로우 판다"`). 상품 정보 확인 화면에서 영문명과 함께 표시. 분석 값을 고쳤으면 이 요청에서 새로 만들어 응답이 1~2초 늦어질 수 있음. 만들지 못하면 `null`(가격 계산은 성공). 상세는 [`korean-product-name.md`](korean-product-name.md) |
 
 ### 시세 Match 객체
 
@@ -1011,7 +1011,8 @@ API 요청 자체는 정상적으로 처리되었으므로 `200 OK`가 반환되
     "priceRange": "시세 정보 없음",
     "reason": "입력한 브랜드, 모델명, 색상, 사이즈와 일치하는 시세 데이터를 찾지 못했습니다. 추천 가격 산정을 위해서는 유사 거래 데이터가 추가로 필요합니다.",
     "kreamMatches": [],
-    "ebayMatches": []
+    "ebayMatches": [],
+    "nameKo": "나이키 덩크 로우 판다"
   },
   "error": null
 }
@@ -1341,7 +1342,7 @@ POST /api/products                   (아래 본문 — imageUrls 없음)
 (auction-spec §1)로 이어집니다. 내가 등록한 상품·경매 목록은 `GET /api/me/selling-auctions`(#147)로 조회합니다.
 
 응답의 `nameKo`는 서버가 요청의 `brand`·`modelName`·`color`로 정해 저장한 한국어 상품명입니다(요청으로 받지 않음).
-분석 값을 고쳐 등록하면 이때 새로 만들어 응답이 1~2초 늦어질 수 있고, 만들지 못하면 `null`로 저장되며 등록은
+보통은 가격 계산 때 정한 이름이 그대로 나오고, 만들지 못하면 `null`로 저장되며 등록은
 그대로 성공합니다([`korean-product-name.md`](korean-product-name.md)). `GET /api/products` 목록 항목에도 같은 `nameKo`가 있습니다.
 
 ### Failure

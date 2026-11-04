@@ -199,12 +199,12 @@ public class AnalysisTaskConsumer implements StreamListener<String, MapRecord<St
             return;
         }
 
-        // 분석 화면이 결과와 함께 한국어 상품명을 보여줄 수 있게, 완료로 바꾸기 전에 이름을 정해 저장해 둔다.
-        // 상태 조회는 저장된 이름만 읽는다(ProductAnalyzeService.getStatus). 실패해도 null로 끝나 분석은 그대로 완료된다.
-        koreanNameResolver.resolve(result.brand(), result.modelName(), result.color());
-
         if (tryCompleteVision(sessionId, token, result)) {
             acknowledge(record);
+            // 한국어 상품명을 미리 정해 저장해 둔다. 분석 화면은 영문만 보여주고 한국어명은 다음 단계인 가격 계산
+            // 응답(ProductPricingService)에 실리므로, 완료·ACK 뒤에 불러 사용자가 분석 결과를 기다리지 않게 한다.
+            // 판매자가 값을 고치지 않으면 가격 계산 때 이 이름을 바로 쓴다. 실패해도 null로 끝난다.
+            koreanNameResolver.resolve(result.brand(), result.modelName(), result.color());
         }
     }
 

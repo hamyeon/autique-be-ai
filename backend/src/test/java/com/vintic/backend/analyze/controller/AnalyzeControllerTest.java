@@ -102,7 +102,6 @@ class AnalyzeControllerTest {
                 null,
                 "Nike",
                 "Air Jordan 1 Retro High OG",
-                "나이키 에어 조던 1 레트로 하이 OG 시카고 로스트 앤 파운드",
                 "Chicago Lost and Found",
                 270,
                 true,
@@ -125,7 +124,8 @@ class AnalyzeControllerTest {
                 .andExpect(jsonPath("$.data.status").value("AWAITING_USER_CONFIRMATION"))
                 .andExpect(jsonPath("$.data.brand").value("Nike"))
                 .andExpect(jsonPath("$.data.modelName").value("Air Jordan 1 Retro High OG"))
-                .andExpect(jsonPath("$.data.nameKo").value("나이키 에어 조던 1 레트로 하이 OG 시카고 로스트 앤 파운드"))
+                // 분석 화면은 영문 칸만 보여준다 - 한국어 상품명은 가격 계산 응답에 실린다
+                .andExpect(jsonPath("$.data.nameKo").doesNotExist())
                 .andExpect(jsonPath("$.data.conditionGrade").value("B"))
                 // 사용자에게 무엇을 확인받아야 하는지가 응답에 실려야 한다
                 .andExpect(jsonPath("$.data.needsUserConfirmation").value(true))

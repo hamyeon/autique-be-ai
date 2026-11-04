@@ -2,6 +2,7 @@ package com.vintic.backend.analyze.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.vintic.backend.ai.naming.KoreanProductNameResolver;
 import com.vintic.backend.common.exception.AiApiException;
 import com.vintic.backend.common.exception.AnalysisSessionNotFoundException;
 import com.vintic.backend.common.exception.InvalidAnalysisStatusException;
@@ -38,6 +39,9 @@ class ProductPricingServiceTest {
     @Mock
     private PricingAttemptCoordinator coordinator;
 
+    @Mock
+    private KoreanProductNameResolver koreanNameResolver;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     private CalculatePriceRequest request() {
@@ -47,7 +51,7 @@ class ProductPricingServiceTest {
     }
 
     private ProductPricingService newService() {
-        return new ProductPricingService(pricingService, coordinator, objectMapper);
+        return new ProductPricingService(pricingService, coordinator, objectMapper, koreanNameResolver);
     }
 
     @Test
@@ -64,11 +68,15 @@ class ProductPricingServiceTest {
                 List.of(matchedPrice), List.of()
         );
         when(pricingService.calculate(any())).thenReturn(pricingResult);
+        when(koreanNameResolver.resolve("Nike", "Air Jordan 1 Retro High OG", "Chicago Lost and Found"))
+                .thenReturn("나이키 에어 조던 1 레트로 하이 OG 시카고 로스트 앤 파운드");
 
         CalculatePriceResponse response = newService().calculatePrice(request(), 1L);
 
         assertThat(response.recommendedPrice()).isEqualTo(300000);
         assertThat(response.kreamMatches().get(0).source()).isEqualTo("KREAM");
+        // 상품 정보 확인 화면용 한국어 상품명은 판매자가 확정한 값으로 정한다
+        assertThat(response.nameKo()).isEqualTo("나이키 에어 조던 1 레트로 하이 OG 시카고 로스트 앤 파운드");
 
         verify(coordinator).startOwned(eq(1L), eq(1L), anyString());
         verify(coordinator).tryCompletePricing(eq(1L), anyString());
@@ -131,6 +139,8 @@ class ProductPricingServiceTest {
 
         assertThatThrownBy(() -> newService().calculatePrice(request(), 1L))
                 .isInstanceOf(InvalidAnalysisStatusException.class);
+        // 버려지는 결과에 번역 비용을 쓰지 않는다
+        verifyNoInteractions(koreanNameResolver);
     }
 
     @Test
@@ -140,7 +150,7 @@ class ProductPricingServiceTest {
                 .thenThrow(new JsonProcessingException("직렬화 실패") {
                 });
 
-        ProductPricingService sut = new ProductPricingService(pricingService, coordinator, failingObjectMapper);
+        ProductPricingService sut = new ProductPricingService(pricingService, coordinator, failingObjectMapper, koreanNameResolver);
 
         assertThatThrownBy(() -> sut.calculatePrice(request(), 1L))
                 .isInstanceOf(AiApiException.class);

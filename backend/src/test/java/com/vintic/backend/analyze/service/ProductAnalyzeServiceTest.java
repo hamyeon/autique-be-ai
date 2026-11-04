@@ -1,7 +1,6 @@
 package com.vintic.backend.analyze.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.vintic.backend.ai.naming.KoreanProductNameResolver;
 import com.vintic.backend.ai.vision.dto.ConditionGrade;
 import com.vintic.backend.ai.vision.dto.VisionAnalysisResult;
 import com.vintic.backend.ai.vision.dto.VisionDefect;
@@ -62,9 +61,6 @@ class ProductAnalyzeServiceTest {
     private S3UploaderService s3UploaderService;
 
     @Mock
-    private KoreanProductNameResolver koreanNameResolver;
-
-    @Mock
     private ProductAnalysisSessionRepository sessionRepository;
 
     @Mock
@@ -87,7 +83,7 @@ class ProductAnalyzeServiceTest {
     private ProductAnalyzeService newService() {
         return new ProductAnalyzeService(
                 s3UploaderService, sessionRepository, failureRecorder, queueCommitter, analysisTaskProducer,
-                objectMapper, s3UrlPresigner, photoUsageCommitter, koreanNameResolver
+                objectMapper, s3UrlPresigner, photoUsageCommitter
         );
     }
 
@@ -352,17 +348,12 @@ class ProductAnalyzeServiceTest {
         );
         session.completeVision("test-token", objectMapper.writeValueAsString(visionResult));
         when(sessionRepository.findById(1L)).thenReturn(Optional.of(session));
-        when(koreanNameResolver.findSaved("Nike", "Air Jordan 1 Retro High OG", "Chicago Lost and Found"))
-                .thenReturn("나이키 에어 조던 1 레트로 하이 OG 시카고");
 
         AnalysisStatusResponse response = newService().getStatus(1L, USER_ID);
 
         assertThat(response.status()).isEqualTo("AWAITING_USER_CONFIRMATION");
         assertThat(response.brand()).isEqualTo("Nike");
         assertThat(response.modelName()).isEqualTo("Air Jordan 1 Retro High OG");
-        // 폴링 API라 번역은 부르지 않고 저장된 이름만 읽는다
-        assertThat(response.nameKo()).isEqualTo("나이키 에어 조던 1 레트로 하이 OG 시카고");
-        verify(koreanNameResolver, never()).resolve(any(), any(), any());
         assertThat(response.conditionGrade()).isEqualTo("B");
         assertThat(response.boxIncluded()).isTrue();
         assertThat(response.confidence()).isEqualTo(0.82);
