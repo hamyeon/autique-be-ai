@@ -2,6 +2,7 @@ package com.vintic.backend.analyze.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.vintic.backend.ai.naming.KoreanProductNameResolver;
 import com.vintic.backend.common.exception.AiApiException;
 import com.vintic.backend.common.exception.InvalidAnalysisStatusException;
 import com.vintic.backend.product.dto.CalculatePriceRequest;
@@ -32,6 +33,7 @@ public class ProductPricingService {
     private final PricingService pricingService;
     private final PricingAttemptCoordinator coordinator;
     private final ObjectMapper objectMapper;
+    private final KoreanProductNameResolver koreanNameResolver;
 
     public CalculatePriceResponse calculatePrice(CalculatePriceRequest request, Long userId) {
         PricingRequest pricingRequest = new PricingRequest(
@@ -73,6 +75,11 @@ public class ProductPricingService {
             );
         }
 
+        // 상품 정보 확인 화면에 영문명과 함께 보여줄 한국어 상품명. 판매자가 분석 값을 그대로 두면 Worker가 분석 직후
+        // 미리 저장해 둔 이름이 바로 나오고, 고쳤으면 여기서 번역한다(1~2초). 가격 계산이 성공한 뒤에만 부른다 -
+        // 실패·취소된 요청에 번역 비용을 쓰지 않는다. 실패하면 null이고 가격 계산 응답은 그대로 나간다.
+        String nameKo = koreanNameResolver.resolve(request.brand(), request.modelName(), request.color());
+
         return new CalculatePriceResponse(
                 result.recommendedPrice(),
                 result.baseMarketPrice(),
@@ -83,7 +90,8 @@ public class ProductPricingService {
                 result.priceRange(),
                 result.reason(),
                 toCalculateMatches(result.kreamMatches()),
-                toCalculateMatches(result.ebayMatches())
+                toCalculateMatches(result.ebayMatches()),
+                nameKo
         );
     }
 

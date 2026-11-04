@@ -174,7 +174,7 @@ class AnalysisTaskConsumerTest {
         newConsumer().onMessage(recordFor(1L, imageUrls));
 
         verify(streamOperations).acknowledge(eq(properties.getKey()), eq(properties.getGroup()), eq(RecordId.of("1-0")));
-        // 분석 화면이 결과와 함께 한국어 상품명을 볼 수 있게 완료 전에 이름을 정해 둔다
+        // 가격 계산 때 바로 쓸 수 있게 완료·ACK 뒤에 한국어 상품명을 미리 정해 둔다
         VisionAnalysisResult result = sampleResult();
         verify(koreanNameResolver).resolve(result.brand(), result.modelName(), result.color());
     }
@@ -633,6 +633,8 @@ class AnalysisTaskConsumerTest {
         newConsumer().onMessage(recordFor(1L, List.of("https://example.com/a.jpg")));
 
         verify(redisTemplate, never()).opsForStream();
+        // 완료가 반영되지 않은 시도는 한국어 상품명도 미리 만들지 않는다
+        verify(koreanNameResolver, never()).resolve(any(), any(), any());
     }
 
     @Test
