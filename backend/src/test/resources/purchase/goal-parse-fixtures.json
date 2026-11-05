@@ -1,6 +1,6 @@
 {
   "version": "2026-11-05",
-  "description": "자연어 구매 목표 → GoalDraft 파싱 하네스 평가 셋 (#95). 실제 사용자 표현을 흉내 낸 문장에 기대값을 사람이 라벨링했다. brand/modelKey/minCondition/hardMaxAmount/sizeKr는 정확히 일치해야 정답(null도 값이다). freeTextKeywords는 freeTextConditions에 포함돼야 하는 단어 - 재현율로 채점하고 비어 있으면 채점하지 않는다. 모델 혼동(990/993, 덩크로우/덩크하이), 최소/최대 금액, 만원대, 사이즈와 품번 숫자 혼동, 카탈로그 밖 모델, 브랜드만 있는 경우를 고르게 넣었다. 2026-11-05: deadline(YYYY-MM-DD, today 기준) 추가 - 생략한 케이스는 기한 없음(null)이 정답이다.",
+  "description": "자연어 구매 목표 → GoalDraft 파싱 하네스 평가 셋 (#95). 실제 사용자 표현을 흉내 낸 문장에 기대값을 사람이 라벨링했다. brand/modelKey/minCondition/hardMaxAmount/sizeKr는 정확히 일치해야 정답(null도 값이다). freeTextKeywords는 freeTextConditions에 포함돼야 하는 단어 - 재현율로 채점하고 비어 있으면 채점하지 않는다. 모델 혼동(990/993, 덩크로우/덩크하이), 최소/최대 금액, 만원대, 사이즈와 품번 숫자 혼동, 카탈로그 밖 모델, 브랜드만 있는 경우를 고르게 넣었다. 2026-11-05: deadline(YYYY-MM-DD, today 기준) 추가 - 생략한 케이스는 기한 없음 또는 상한(한 달) 초과로 null이 정답이다.",
   "today": "2026-11-05",
   "cases": [
     { "id": "nb990-a-150k", "text": "뉴발 990, A급 이상, 15만원 이하로 하나", "expected": { "brand": "New Balance", "modelKey": "nb990", "minCondition": "A", "hardMaxAmount": 150000, "sizeKr": null, "freeTextKeywords": [] }, "note": "설계안 6-1 예시" },
@@ -60,9 +60,9 @@
     { "id": "deadline-two-weeks", "text": "가젤 250 8만원 이하 2주 안에", "expected": { "brand": "Adidas", "modelKey": "gazelle", "minCondition": null, "hardMaxAmount": 80000, "sizeKr": 250, "deadline": "2026-11-19", "freeTextKeywords": [] }, "note": "기한: N주" },
     { "id": "deadline-next-week", "text": "삼바 240 다음 주까지 10만원", "expected": { "brand": "Adidas", "modelKey": "sambaog", "minCondition": null, "hardMaxAmount": 100000, "sizeKr": 240, "deadline": "2026-11-15", "freeTextKeywords": [] }, "note": "기한: 다음 주 = 다음 주 일요일" },
     { "id": "deadline-one-month", "text": "덩크 270 상태 좋은 거 한 달 안에 13만 이하", "expected": { "brand": "Nike", "modelKey": "dunklow", "minCondition": "A", "hardMaxAmount": 130000, "sizeKr": 270, "deadline": "2026-12-05", "freeTextKeywords": [] }, "note": "기한: 한 달 = 다음 달 같은 날" },
-    { "id": "deadline-month-end", "text": "뉴발 990 A급 이상 15만원 이하 12월 말까지", "expected": { "brand": "New Balance", "modelKey": "nb990", "minCondition": "A", "hardMaxAmount": 150000, "sizeKr": null, "deadline": "2026-12-31", "freeTextKeywords": [] }, "note": "기한: M월 말" },
+    { "id": "deadline-month-end", "text": "뉴발 990 A급 이상 15만원 이하 12월 말까지", "expected": { "brand": "New Balance", "modelKey": "nb990", "minCondition": "A", "hardMaxAmount": 150000, "sizeKr": null, "freeTextKeywords": [] }, "note": "기한 상한(한 달) 초과 → null" },
     { "id": "deadline-tomorrow", "text": "조던1 280 30만원까지 내일까지", "expected": { "brand": "Nike", "modelKey": "jordan1", "minCondition": null, "hardMaxAmount": 300000, "sizeKr": 280, "deadline": "2026-11-06", "freeTextKeywords": [] }, "note": "기한: 내일. 금액과 기한 둘 다 '까지'" },
-    { "id": "deadline-slash-next-year", "text": "삼바 10만 이하 1/10까지", "expected": { "brand": "Adidas", "modelKey": "sambaog", "minCondition": null, "hardMaxAmount": 100000, "sizeKr": null, "deadline": "2027-01-10", "freeTextKeywords": [] }, "note": "기한: 지난 날짜는 내년" },
+    { "id": "deadline-slash-next-year", "text": "삼바 10만 이하 1/10까지", "expected": { "brand": "Adidas", "modelKey": "sambaog", "minCondition": null, "hardMaxAmount": 100000, "sizeKr": null, "freeTextKeywords": [] }, "note": "지난 날짜는 내년 → 한 달 초과라 null" },
     { "id": "deadline-days", "text": "뉴발 990 270 3일 내로 15만", "expected": { "brand": "New Balance", "modelKey": "nb990", "minCondition": null, "hardMaxAmount": 150000, "sizeKr": 270, "deadline": "2026-11-08", "freeTextKeywords": [] }, "note": "기한: N일" },
     { "id": "deadline-urgent-only", "text": "덩크로우 260 12만원 이하 최대한 빨리", "expected": { "brand": "Nike", "modelKey": "dunklow", "minCondition": null, "hardMaxAmount": 120000, "sizeKr": 260, "freeTextKeywords": [] }, "note": "막연한 재촉은 기한이 아니다(null)" }
   ]

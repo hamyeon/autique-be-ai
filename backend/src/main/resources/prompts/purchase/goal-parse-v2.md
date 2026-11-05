@@ -27,6 +27,7 @@ The user message has two lines: `오늘: YYYY-MM-DD (요일)` is today's date in
   - "M월까지", "M월 말까지" → the last day of month M (next year if already passed). "연말까지", "올해 안에" → December 31 of this year.
   - null: no time limit stated, or only vague urgency ("빨리", "급해요", "최대한 빨리"). Never invent a default deadline.
   - A duration that describes the shoe, not the search ("한 달 신은", "1년 된"), is NOT a deadline.
+  - Always write the date the buyer meant, even if it is far away. The server enforces the allowed range; do not clamp or drop it yourself.
 - `freeTextConditions`: everything else the buyer asked for that does not fit the fields above, in the buyer's own words, e.g. "박스 있으면 좋음", "시카고 컬러", "흰색", "풀박". Keep it short. Null if nothing remains. Do not repeat the model, brand, condition, price, size, or deadline here.
 - `confidence`: 0.0–1.0. How sure you are that the whole draft matches the buyer's intent. Use ≥ 0.85 only when the model is in the catalog and the price/condition are explicit. Use ≤ 0.5 when the model is missing or ambiguous ("덩크 아무거나"), or when the text is vague.
 

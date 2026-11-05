@@ -94,7 +94,7 @@ public class RuleBasedGoalParser implements GoalParser {
         LocalDate today = GoalDeadlines.today(clock);
         DeadlineExtractor.Result deadlineDate = DeadlineExtractor.extract(lower, today, consumed);
         GoalDeadlines.Resolved deadline = deadlineDate.invalid()
-                ? GoalDeadlines.Resolved.OUT_OF_RANGE
+                ? GoalDeadlines.Resolved.INVALID
                 : GoalDeadlines.resolve(deadlineDate.date(), today);
 
         String freeText = leftover(text, consumed);
@@ -105,7 +105,7 @@ public class RuleBasedGoalParser implements GoalParser {
 
         List<String> warnings = GoalDraftWarnings.forDraft(
                 modelKey, brandName, amount.value(), sizeKr, deadline.deadline(), freeText,
-                amount.minIgnored(), amount.outOfRange(), deadline.outOfRange());
+                amount.minIgnored(), amount.outOfRange(), deadline.problemWarning());
         if (condition == null) {
             warnings.add(GoalDraftWarnings.CONDITION_MISSING);
         }

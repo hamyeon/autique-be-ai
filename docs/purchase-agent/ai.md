@@ -118,7 +118,8 @@ Structured Outputs는 형태만 보장한다. 값은 서버가 본다.
 | `sizeKr` 200~330 밖 | null |
 | `minCondition` 미지 표기 | null |
 | `confidence` 0~1 밖 | 잘라냄 |
-| `deadlineDate`가 `YYYY-MM-DD` 아님 / 오늘 이전 / 오늘+365일 초과 | null + "기한 범위" 경고. 연도 착각(작년 날짜)이 흔한 실수라 잡는다. 기준일은 LLM에게 보낸 날짜와 같은 값을 쓴다 |
+| `deadlineDate`가 `YYYY-MM-DD` 아님 / 오늘 이전 | null + "해석 실패" 경고. 기준일은 LLM에게 보낸 날짜와 같은 값을 쓴다 |
+| `deadlineDate`가 한 달 뒤 같은 날(11/5 → 12/5) 초과 | null + "최대 한 달" 경고. 상한은 파싱 초안에만 적용 - 등록 API는 "현재 이후"만 검사한다. LLM에게는 범위를 자르지 말고 의도한 날짜를 그대로 쓰게 하고 서버가 판단한다 |
 
 ### 1-4. 관측성
 

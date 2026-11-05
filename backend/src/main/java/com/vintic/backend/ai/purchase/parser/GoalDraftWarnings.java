@@ -22,7 +22,8 @@ final class GoalDraftWarnings {
     static final String BUDGET_MIN_IGNORED = "최소 금액 조건은 지원하지 않아 무시했습니다.";
     static final String BUDGET_OUT_OF_RANGE = "예산 금액이 비정상 범위라 비웠습니다. 직접 입력해 주세요.";
     static final String DEADLINE_MISSING = "기한이 없습니다. 언제까지 찾을지 정해 주세요.";
-    static final String DEADLINE_OUT_OF_RANGE = "기한을 날짜로 해석하지 못했거나 범위(오늘~1년 뒤)를 벗어나 비웠습니다. 직접 입력해 주세요.";
+    static final String DEADLINE_INVALID = "기한을 날짜로 해석하지 못해 비웠습니다. 직접 입력해 주세요.";
+    static final String DEADLINE_TOO_FAR = "기한은 최대 한 달 뒤까지 정할 수 있어 비웠습니다. 한 달 안의 날짜로 정해 주세요.";
     static final String CONDITION_MISSING = "상태 등급 조건이 없습니다. 모든 등급이 후보가 됩니다.";
     static final String FREE_TEXT_IS_SOFT = "'%s' 조건은 v1에서 필수가 아닌 참고 사항으로만 반영됩니다.";
     static final String AI_FALLBACK = "AI 해석에 실패해 규칙 기반 초안을 보여드립니다. 내용을 꼭 확인해 주세요.";
@@ -35,7 +36,7 @@ final class GoalDraftWarnings {
 
     static List<String> forDraft(String modelKey, String brand, Long hardMaxAmount, Integer sizeKr,
                                  OffsetDateTime deadline, String freeText, boolean minPriceIgnored,
-                                 boolean budgetOutOfRange, boolean deadlineOutOfRange) {
+                                 boolean budgetOutOfRange, String deadlineProblem) {
         List<String> warnings = new ArrayList<>();
         if (modelKey == null) {
             warnings.add(brand == null ? MODEL_UNKNOWN : BRAND_ONLY);
@@ -50,7 +51,7 @@ final class GoalDraftWarnings {
             warnings.add(SIZE_MISSING);
         }
         if (deadline == null) {
-            warnings.add(deadlineOutOfRange ? DEADLINE_OUT_OF_RANGE : DEADLINE_MISSING);
+            warnings.add(deadlineProblem != null ? deadlineProblem : DEADLINE_MISSING);
         }
         if (freeText != null && HARD_INTENT.matcher(freeText).find()) {
             warnings.add(FREE_TEXT_IS_SOFT.formatted(freeText));

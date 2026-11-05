@@ -61,7 +61,7 @@ public class GoalDraftValidator {
         String freeText = blankToNull(llm.freeTextConditions());
 
         List<String> warnings = GoalDraftWarnings.forDraft(modelKey, brand, amount, sizeKr, deadline.deadline(), freeText,
-                false, amountOutOfRange, deadline.outOfRange());
+                false, amountOutOfRange, deadline.problemWarning());
         if (modelKey == null && (unknownKey || modelQuery != null)) {
             // 모델 이름은 알아봤는데 시세 카탈로그에 없다 - "못 알아봄"과는 다른 안내가 필요하다.
             warnings.removeIf(w -> w.equals(GoalDraftWarnings.MODEL_UNKNOWN) || w.equals(GoalDraftWarnings.BRAND_ONLY));
@@ -79,7 +79,7 @@ public class GoalDraftValidator {
                 confidence, warnings);
     }
 
-    // "YYYY-MM-DD"가 아니거나, 지난 날짜·1년 넘게 뒤면 비운다(연도 착각이 흔한 실수다).
+    // "YYYY-MM-DD"가 아니거나, 지난 날짜·한 달 넘게 뒤면 비운다.
     private GoalDeadlines.Resolved resolveDeadline(String deadlineDate, LocalDate today) {
         String value = blankToNull(deadlineDate);
         if (value == null) {
@@ -88,7 +88,7 @@ public class GoalDraftValidator {
         try {
             return GoalDeadlines.resolve(LocalDate.parse(value), today);
         } catch (DateTimeParseException e) {
-            return GoalDeadlines.Resolved.OUT_OF_RANGE;
+            return GoalDeadlines.Resolved.INVALID;
         }
     }
 

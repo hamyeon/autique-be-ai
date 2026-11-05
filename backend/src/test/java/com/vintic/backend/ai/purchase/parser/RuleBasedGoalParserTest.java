@@ -175,10 +175,10 @@ class RuleBasedGoalParserTest {
             "10일 이내, 2026-11-15",
             "2주 안에, 2026-11-19",
             "1개월 이내로, 2026-12-05",
+            "4주 안에, 2026-12-03",
             "일주일 안에, 2026-11-12",
             "보름 안에, 2026-11-20",
             "한 달 안에, 2026-12-05",
-            "석 달 동안, 2027-02-05",
             "이번 주까지, 2026-11-08",
             "이번 주 안에, 2026-11-08",
             "이번 주말까지, 2026-11-08",
@@ -186,18 +186,14 @@ class RuleBasedGoalParserTest {
             "다음 주까지, 2026-11-15",
             "이번 달까지, 2026-11-30",
             "이달 안에, 2026-11-30",
-            "다음 달까지, 2026-12-31",
             "11월 20일까지, 2026-11-20",
-            "12월 25일, 2026-12-25",
+            "12월 5일, 2026-12-05",
             "11/20까지, 2026-11-20",
-            "1/10까지, 2027-01-10",
-            "3월 1일까지, 2027-03-01",
-            "12월 말까지, 2026-12-31",
-            "2월까지, 2027-02-28",
+            "12/1까지, 2026-12-01",
+            "11월 말까지, 2026-11-30",
+            "11월까지, 2026-11-30",
             "20일까지, 2026-11-20",
-            "3일까지, 2026-12-03",
-            "연말까지, 2026-12-31",
-            "올해 안에, 2026-12-31"
+            "3일까지, 2026-12-03"
     })
     void 기한_표현을_기준일로부터_날짜로_바꾸고_23시59분으로_채운다(String phrase, LocalDate expected) {
         GoalDraft draft = parser.parse("뉴발 990 270 15만원 이하 " + phrase);
@@ -226,11 +222,24 @@ class RuleBasedGoalParserTest {
     }
 
     @Test
-    void 날짜로_성립하지_않는_기한은_비우고_범위_경고를_붙인다() {
+    void 날짜로_성립하지_않는_기한은_비우고_해석_실패_경고를_붙인다() {
         GoalDraft draft = parser.parse("뉴발 990 270 15만원 이하 2월 30일까지");
 
         assertThat(draft.deadline()).isNull();
-        assertThat(draft.warnings()).contains(GoalDraftWarnings.DEADLINE_OUT_OF_RANGE);
+        assertThat(draft.warnings()).contains(GoalDraftWarnings.DEADLINE_INVALID);
+    }
+
+    // 상한은 한 달 뒤 같은 날(2026-12-05). 해석은 되지만 너무 먼 기한은 "최대 한 달" 경고로 비운다.
+    @ParameterizedTest
+    @ValueSource(strings = {"연말까지", "올해 안에", "다음 달까지", "12월 말까지", "1/10까지", "석 달 동안", "5주 안에", "12월 6일까지"})
+    void 한_달보다_먼_기한은_비우고_상한_경고를_붙인다(String phrase) {
+        GoalDraft draft = parser.parse("뉴발 990 270 15만원 이하 " + phrase);
+
+        assertThat(draft.deadline()).isNull();
+        assertThat(draft.warnings()).contains(GoalDraftWarnings.DEADLINE_TOO_FAR)
+                .doesNotContain(GoalDraftWarnings.DEADLINE_MISSING);
+        // 상한에 걸려도 기한 표현은 해석한 것이므로 자유 조건에 남지 않는다.
+        assertThat(draft.freeTextConditions()).isNull();
     }
 
     @Test

@@ -78,7 +78,8 @@ class GoalDraftValidatorTest {
 
         assertThat(draft.deadline()).isEqualTo(OffsetDateTime.parse("2026-11-12T23:59:00+09:00"));
         assertThat(draft.warnings())
-                .doesNotContain(GoalDraftWarnings.DEADLINE_MISSING, GoalDraftWarnings.DEADLINE_OUT_OF_RANGE);
+                .doesNotContain(GoalDraftWarnings.DEADLINE_MISSING, GoalDraftWarnings.DEADLINE_INVALID,
+                        GoalDraftWarnings.DEADLINE_TOO_FAR);
     }
 
     @Test
@@ -99,13 +100,26 @@ class GoalDraftValidatorTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"2026-11-04", "2027-11-06", "2025-11-12", "11월 12일", "2026-02-30", "2026/11/12"})
-    void 지난_날짜_1년_넘는_날짜_형식이_틀린_값은_비운다(String deadlineDate) {
+    @ValueSource(strings = {"2026-11-04", "2025-11-12", "11월 12일", "2026-02-30", "2026/11/12"})
+    void 지난_날짜와_형식이_틀린_값은_비우고_해석_실패_경고를_붙인다(String deadlineDate) {
         GoalDraft draft = validator.validate(new LlmGoalDraft(
                 "nb990", null, null, null, 150_000L, 270, deadlineDate, null, 0.9), TODAY);
 
         assertThat(draft.deadline()).isNull();
-        assertThat(draft.warnings()).contains(GoalDraftWarnings.DEADLINE_OUT_OF_RANGE)
-                .doesNotContain(GoalDraftWarnings.DEADLINE_MISSING);
+        assertThat(draft.warnings()).contains(GoalDraftWarnings.DEADLINE_INVALID)
+                .doesNotContain(GoalDraftWarnings.DEADLINE_MISSING, GoalDraftWarnings.DEADLINE_TOO_FAR);
+    }
+
+    @Test
+    void 상한은_한_달_뒤_같은_날까지다() {
+        GoalDraft boundary = validator.validate(new LlmGoalDraft(
+                "nb990", null, null, null, 150_000L, 270, "2026-12-05", null, 0.9), TODAY);
+        GoalDraft tooFar = validator.validate(new LlmGoalDraft(
+                "nb990", null, null, null, 150_000L, 270, "2026-12-06", null, 0.9), TODAY);
+
+        assertThat(boundary.deadline()).isEqualTo(OffsetDateTime.parse("2026-12-05T23:59:00+09:00"));
+        assertThat(tooFar.deadline()).isNull();
+        assertThat(tooFar.warnings()).contains(GoalDraftWarnings.DEADLINE_TOO_FAR)
+                .doesNotContain(GoalDraftWarnings.DEADLINE_MISSING, GoalDraftWarnings.DEADLINE_INVALID);
     }
 }
