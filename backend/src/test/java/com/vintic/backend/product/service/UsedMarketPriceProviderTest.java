@@ -40,6 +40,72 @@ class UsedMarketPriceProviderTest {
     }
 
     @Test
+    void 모델_키와_글자가_안_겹치는_표기는_별칭_표로_찾는다() {
+        // Vision이 "All Star"라고 답하면 chucktaylor와 글자가 안 겹쳐 포함 검사로는 못 찾는다.
+        // 별칭 표로 키를 접어 찾아야 한다. 한글 모델명도 같은 경로로 붙는다.
+        assertThat(provider.find("Converse", "All Star")).map(UsedMarketPriceProvider.UsedMarketPrice::modelNorm)
+                .contains("chucktaylor");
+        assertThat(provider.find("Converse", "올스타 하이")).map(UsedMarketPriceProvider.UsedMarketPrice::modelNorm)
+                .contains("chucktaylor");
+        assertThat(provider.find("Nike", "덩크 로우")).map(UsedMarketPriceProvider.UsedMarketPrice::modelNorm)
+                .contains("dunklow");
+    }
+
+    @Test
+    void 골든구스_슈퍼스타는_아디다스_슈퍼스타_시세에_붙지_않는다() {
+        assertThat(provider.find("Golden Goose", "Superstar")).map(UsedMarketPriceProvider.UsedMarketPrice::modelNorm)
+                .contains("goldengoose");
+        assertThat(provider.find("Adidas", "Superstar")).map(UsedMarketPriceProvider.UsedMarketPrice::modelNorm)
+                .contains("superstar");
+    }
+
+    @Test
+    void 더_구체적인_모델이_행_순서보다_먼저다() {
+        // 포함 검사만 하면 표본 많은 행이 먼저 걸려 "Jordan 11"이 jordan1에 붙었다
+        assertThat(provider.find("Nike", "Air Jordan 11 Retro")).map(UsedMarketPriceProvider.UsedMarketPrice::modelNorm)
+                .contains("jordan11");
+        assertThat(provider.find("Converse", "Chuck Taylor All Star 70")).map(UsedMarketPriceProvider.UsedMarketPrice::modelNorm)
+                .contains("chuck70");
+        assertThat(provider.find("Nike", "SB Dunk Low Pro")).map(UsedMarketPriceProvider.UsedMarketPrice::modelNorm)
+                .contains("dunksb");
+        assertThat(provider.find("Nike", "Air Jordan 1 Retro High OG")).map(UsedMarketPriceProvider.UsedMarketPrice::modelNorm)
+                .contains("jordan1");
+    }
+
+    @Test
+    void 브랜드_표기도_표준_표기로_접는다() {
+        // Vision이 브랜드를 "Jordan"으로 답해도 나이키 시세에 붙어야 한다
+        assertThat(provider.find("Jordan", "Air Jordan 4")).map(UsedMarketPriceProvider.UsedMarketPrice::modelNorm)
+                .contains("jordan4");
+    }
+
+    @Test
+    void 브랜드_전체_시세를_찾는다() {
+        var converse = provider.findBrand("Converse");
+
+        assertThat(converse).isPresent();
+        assertThat(converse.get().listingCount()).isGreaterThanOrEqualTo(30);
+        assertThat(converse.get().q1Price()).isLessThanOrEqualTo(converse.get().medianPrice());
+        assertThat(converse.get().q3Price()).isGreaterThanOrEqualTo(converse.get().medianPrice());
+        assertThat(provider.findBrand("컨버스")).isPresent();
+        assertThat(provider.findBrand("없는브랜드")).isEmpty();
+        assertThat(provider.findBrand(null)).isEmpty();
+    }
+
+    @Test
+    void 별칭_경로에서도_브랜드가_다르면_매칭하지_않는다() {
+        // 별칭 표는 "올스타"를 컨버스로 아는데, 요청 브랜드가 나이키면 붙이면 안 된다
+        assertThat(provider.find("Nike", "All Star")).isEmpty();
+    }
+
+    @Test
+    void 별칭으로_찾은_모델도_색상_버킷을_찾는다() {
+        // 모델 시세를 별칭으로 찾았으면 색상 버킷도 같은 키로 찾아야 한다
+        assertThat(provider.findColor("Converse", "All Star", "Black")).map(UsedMarketPriceProvider.ColorPrice::modelNorm)
+                .contains("chucktaylor");
+    }
+
+    @Test
     void 시세에_없는_모델이면_empty를_돌려준다() {
         // 호출부는 이 empty를 보고 기존 KREAM/eBay 방식으로 폴백한다
         assertThat(provider.find("Nike", "존재하지 않는 모델")).isEmpty();

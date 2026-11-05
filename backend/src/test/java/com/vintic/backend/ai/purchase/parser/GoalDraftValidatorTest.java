@@ -34,10 +34,10 @@ class GoalDraftValidatorTest {
     @Test
     void 카탈로그_밖_키는_비우고_시세_없음_경고를_붙이며_확신도를_누른다() {
         GoalDraft draft = validator.validate(new LlmGoalDraft(
-                "yeezy350", "Adidas Yeezy 350", "Adidas", "DS", 300_000L, 270, null, "제브라", 0.95), TODAY);
+                "yeezyslide", "Adidas Yeezy Slide", "Adidas", "DS", 150_000L, 270, null, "본", 0.95), TODAY);
 
         assertThat(draft.modelKey()).isNull();
-        assertThat(draft.modelQuery()).isEqualTo("Adidas Yeezy 350");
+        assertThat(draft.modelQuery()).isEqualTo("Adidas Yeezy Slide");
         assertThat(draft.brand()).isEqualTo("Adidas");
         assertThat(draft.warnings()).contains(GoalDraftWarnings.MODEL_NOT_IN_CATALOG);
         assertThat(draft.confidence()).isLessThanOrEqualTo(0.6);

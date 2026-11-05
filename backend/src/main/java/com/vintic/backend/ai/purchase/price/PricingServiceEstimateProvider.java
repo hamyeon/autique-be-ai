@@ -52,9 +52,17 @@ public class PricingServiceEstimateProvider implements PriceEstimateProvider {
         PriceEstimate.Source source = result.kreamAveragePrice() > 0
                 ? PriceEstimate.Source.KREAM
                 : PriceEstimate.Source.USED_MARKET;
-        int sampleCount = source == PriceEstimate.Source.USED_MARKET
-                ? usedMarketPriceProvider.find(brand, model).map(UsedMarketPriceProvider.UsedMarketPrice::listingCount).orElse(0)
-                : 0;
+        Optional<UsedMarketPriceProvider.UsedMarketPrice> modelMarket = source == PriceEstimate.Source.USED_MARKET
+                ? usedMarketPriceProvider.find(brand, model)
+                : Optional.empty();
+        // KREAM도 모델 시세도 아닌데 값이 왔으면 브랜드 전체 시세(3순위) 추정이다. 판매 화면에서는
+        // "없음"보다 낫지만, Agent는 이 값으로 "목표가 대비 싸다"를 판정하면 안 된다 - 모델이 다른
+        // 신발의 가격이 섞여 있다. 그래서 Agent에는 기존처럼 시세 없음으로 넘긴다.
+        if (source == PriceEstimate.Source.USED_MARKET && modelMarket.isEmpty()) {
+            log.info("Agent 시세 없음(브랜드 단위 추정만 있음): brand={}, model={}", brand, model);
+            return Optional.empty();
+        }
+        int sampleCount = modelMarket.map(UsedMarketPriceProvider.UsedMarketPrice::listingCount).orElse(0);
 
         // 2순위(KREAM)는 IQR이 없어 min/max가 0일 수 있다. 그때는 추천가로 채워 "범위 없음"을 드러낸다.
         int lower = result.minRecommendedPrice() > 0 ? result.minRecommendedPrice() : result.recommendedPrice();

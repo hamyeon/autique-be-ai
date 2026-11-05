@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from listing_filters import exclusion_reason  # noqa: E402
 from color_families import families  # noqa: E402
 from shoe_models import MODELS, find_model  # noqa: E402
+from brands import find_brand  # noqa: E402
 import re  # noqa: E402
 
 # 새상품 신호 키워드 (crawler/config.py CONDITION_DS_KEYWORDS와 같은 계열)
@@ -33,11 +34,16 @@ OUT = ROOT / "backend" / "src" / "main" / "resources" / "data" / "used_market_pr
 # 부분 데이터라, 한 파일에 섞으면 "색상 행이 없는 모델"과 "모델 자체가 없는 것"이
 # 구분되지 않는다.
 OUT_BY_COLOR = ROOT / "backend" / "src" / "main" / "resources" / "data" / "used_market_prices_by_color.csv"
+# 브랜드 단위 시세. 모델을 특정 못 했을 때의 마지막 폴백이라 모델 시세와 파일을 나눈다 -
+# 정확도 등급이 다른 값을 한 표에 섞으면 호출부가 구분할 수 없다.
+OUT_BY_BRAND = ROOT / "backend" / "src" / "main" / "resources" / "data" / "used_market_prices_by_brand.csv"
 
 # 신발 한 켤레 가격으로 볼 수 있는 범위 (부품·사은품·오타 제외)
 PRICE_MIN, PRICE_MAX = 10_000, 2_000_000
 # 이보다 표본이 적으면 중앙값을 시세라 부르기 어렵다
 MIN_LISTINGS = 10
+# 브랜드 시세는 모델·종류(운동화/슬리퍼/부츠)가 섞인 넓은 분포라 표본을 더 요구한다
+MIN_BRAND_LISTINGS = 30
 
 # 모델 표는 shoe_models.py에 있다 - 구성품 계수 산출(build_component_rates.py)도
 # 같은 표를 쓴다.
@@ -79,15 +85,21 @@ def main():
     model_new_counts = defaultdict(int)   # 모델 -> 새상품 키워드 매물 수
     sources = defaultdict(lambda: defaultdict(int))
     excluded = defaultdict(int)
+    brand_prices = defaultdict(list)
+    brand_model_matched = defaultdict(int)
 
     for source, title, description, raw_price in iter_listings():
         found = find_model(title, description)
-        if not found:
+        # 모델을 못 찾은 매물도 브랜드 시세의 표본은 된다. 브랜드는 제목에서만 읽는다 -
+        # 설명란에는 "나이키·아디다스 다 있어요" 같은 브랜드 나열이 흔하다.
+        brand = found[0] if found else find_brand(title)
+        if not found and not brand:
             continue
         blob = f"{title or ''} {description or ''}"
         reason = exclusion_reason(blob)
         if reason:
-            excluded[reason] += 1
+            if found:
+                excluded[reason] += 1
             continue
         try:
             price = int(raw_price or 0)
@@ -95,6 +107,10 @@ def main():
             continue
         if not (PRICE_MIN <= price <= PRICE_MAX):
             continue
+        brand_prices[brand].append(price)
+        if not found:
+            continue
+        brand_model_matched[brand] += 1
         prices[found].append(price)
         sources[found][source] += 1
         is_new = bool(NEW_PAT.search(blob))
@@ -154,6 +170,21 @@ def main():
               f"  (모델 전체 대비 {premium:+.0f}%)")
     OUT_BY_COLOR.write_text("\n".join(color_lines) + "\n", encoding="utf-8")
     print(f"{OUT_BY_COLOR.relative_to(ROOT)} 작성 - 버킷 {color_kept}개")
+
+    # --- 브랜드 단위 시세. 모델 시세도 KREAM도 없을 때의 마지막 폴백 ---
+    brand_lines = ["brand,listing_count,median_price,q1_price,q3_price,model_matched_count"]
+    print(f"\n[브랜드 시세] 표본 {MIN_BRAND_LISTINGS}건 이상 브랜드만 (모델 미특정 매물 포함)")
+    for brand, values in sorted(brand_prices.items(), key=lambda kv: -len(kv[1])):
+        if len(values) < MIN_BRAND_LISTINGS:
+            continue
+        values.sort()
+        median = int(statistics.median(values))
+        q1, q3 = values[len(values) // 4], values[3 * len(values) // 4]
+        brand_lines.append(f"{brand},{len(values)},{median},{q1},{q3},{brand_model_matched[brand]}")
+        print(f"  {brand:<16} n={len(values):>5}  중앙값 {median:>9,}  IQR {q1:,}~{q3:,}"
+              f"  (모델 특정 {brand_model_matched[brand]}건)")
+    OUT_BY_BRAND.write_text("\n".join(brand_lines) + "\n", encoding="utf-8")
+    print(f"{OUT_BY_BRAND.relative_to(ROOT)} 작성 - 브랜드 {len(brand_lines) - 1}개")
 
 
 if __name__ == "__main__":

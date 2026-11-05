@@ -54,13 +54,13 @@ class MatchResultValidatorTest {
     @Test
     void 설명에서만_다른_모델이_보이는_건_규칙이_확신하지_못하므로_LLM을_따른다() {
         // "m990보다 작게 나옵니다" 같은 비교 언급. 제목·상품정보가 아니면 규칙은 개입하지 않는다.
-        LlmMatchResult llm = new LlmMatchResult(false, 0.0, "매물은 991");
-        AuctionListing listing = new AuctionListing(1L, "New Balance", null, null, "뉴발란스 991 그레이 270", "m990보다 작게 나옵니다");
+        LlmMatchResult llm = new LlmMatchResult(false, 0.0, "매물은 997");
+        AuctionListing listing = new AuctionListing(1L, "New Balance", null, null, "뉴발란스 997 그레이 270", "m990보다 작게 나옵니다");
 
         MatchResult result = validator.validate(llm, nb990, listing);
 
         assertThat(result.matched()).isFalse();
-        assertThat(result.reason()).isEqualTo("매물은 991");
+        assertThat(result.reason()).isEqualTo("매물은 997");
     }
 
     @Test
