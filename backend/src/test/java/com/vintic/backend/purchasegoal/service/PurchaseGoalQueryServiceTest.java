@@ -4,6 +4,10 @@ import com.vintic.backend.ai.purchase.dto.GoalCondition;
 import com.vintic.backend.auction.domain.Auction;
 import com.vintic.backend.auction.domain.AuctionStatus;
 import com.vintic.backend.autobid.domain.AutoBidSetting;
+import com.vintic.backend.autobid.repository.AutoBidSettingRepository;
+import com.vintic.backend.auction.repository.AuctionRepository;
+import com.vintic.backend.order.repository.OrderRepository;
+import com.vintic.backend.purchasegoal.repository.PurchaseGoalMatchRepository;
 import com.vintic.backend.common.exception.PurchaseGoalAccessDeniedException;
 import com.vintic.backend.order.domain.Order;
 import com.vintic.backend.order.domain.OrderStatus;
@@ -32,7 +36,7 @@ import static org.assertj.core.api.Assertions.tuple;
 
 // OrderQueryService의 "404 -> 403 순서" 관례를 그대로 검증한다(Day2 A: 본인 조회/타인 접근 차단).
 @DataJpaTest
-@Import(PurchaseGoalQueryService.class)
+@Import({PurchaseGoalQueryService.class, PurchaseGoalCapPolicy.class})
 class PurchaseGoalQueryServiceTest {
 
     @Autowired
@@ -43,6 +47,18 @@ class PurchaseGoalQueryServiceTest {
 
     @Autowired
     private EntityManager entityManager;
+
+    @Autowired
+    private AutoBidSettingRepository autoBidSettingRepository;
+
+    @Autowired
+    private AuctionRepository auctionRepository;
+
+    @Autowired
+    private OrderRepository orderRepository;
+
+    @Autowired
+    private PurchaseGoalMatchRepository purchaseGoalMatchRepository;
 
     private User persistUser(String email) {
         User user = User.register(email, email, null);
@@ -384,5 +400,69 @@ class PurchaseGoalQueryServiceTest {
                         tuple(won.getId(), "WON", AuctionStatus.ENDED),
                         tuple(live.getId(), "LIVE", AuctionStatus.LIVE)
                 );
+    }
+
+    @Test
+    void 참여_시점_시세와_실제_등록한_상한을_저장값_그대로_반환한다() {
+        User seller = persistUser("seller-snap1@example.com");
+        User owner = persistUser("owner-snap1@example.com");
+        PurchaseGoal goal = persistGoal(owner);
+        Auction live = persistLiveAuction(persistProduct(seller));
+        // 시세 20,000 x cap-ratio 2.0 = 40,000(예산 150,000보다 낮아 시세 기반 상한이 그대로 등록된 경우)
+        entityManager.persist(AutoBidSetting.reserve(live, owner, 40000L, goal.getId(), 20000L));
+        flushAndClear();
+
+        PurchaseGoalDetailResponse response = purchaseGoalQueryService.getGoal(goal.getId(), owner.getId());
+
+        assertThat(response.participations())
+                .extracting(PurchaseGoalParticipationResponse::auctionId,
+                        PurchaseGoalParticipationResponse::estimatedPriceAtEngage,
+                        PurchaseGoalParticipationResponse::autoBidCap)
+                .containsExactly(tuple(live.getId(), 20000L, 40000L));
+    }
+
+    @Test
+    void 스냅샷_도입_전_참여는_시세가_null이어도_조회되고_상한은_그대로_반환한다() {
+        User seller = persistUser("seller-snap2@example.com");
+        User owner = persistUser("owner-snap2@example.com");
+        PurchaseGoal goal = persistGoal(owner);
+        Auction ended = persistEndedAuction(persistProduct(seller));
+        // 기존 4-arg reserve - estimated_price_at_engage 컬럼이 비어 있는 과거 행을 재현한다.
+        persistAutoBidSetting(ended, owner, goal.getId());
+        flushAndClear();
+
+        PurchaseGoalDetailResponse response = purchaseGoalQueryService.getGoal(goal.getId(), owner.getId());
+
+        PurchaseGoalParticipationResponse participation = response.participations().get(0);
+        assertThat(participation.status()).isEqualTo("LOST");
+        assertThat(participation.estimatedPriceAtEngage()).isNull();
+        assertThat(participation.autoBidCap()).isEqualTo(200000L);
+    }
+
+    @Test
+    void capRatio는_현재_설정값을_주고_과거_참여_값은_설정이_바뀌어도_그대로다() {
+        User seller = persistUser("seller-snap3@example.com");
+        User owner = persistUser("owner-snap3@example.com");
+        PurchaseGoal goal = persistGoal(owner);
+        Auction live = persistLiveAuction(persistProduct(seller));
+        // cap-ratio 2.0 시절 참여: 시세 20,000 -> 상한 40,000
+        entityManager.persist(AutoBidSetting.reserve(live, owner, 40000L, goal.getId(), 20000L));
+        flushAndClear();
+
+        assertThat(purchaseGoalQueryService.getGoal(goal.getId(), owner.getId()).capRatio()).isEqualTo(2.0);
+
+        // 설정이 3.0으로 바뀐 서버를 재현한다 - 응답의 capRatio만 바뀌고 과거 참여의 숫자는 재계산되지 않아야 한다.
+        PurchaseGoalQueryService changedConfig = new PurchaseGoalQueryService(
+                purchaseGoalRepository, autoBidSettingRepository, auctionRepository, orderRepository,
+                purchaseGoalMatchRepository, new PurchaseGoalCapPolicy(3.0)
+        );
+        PurchaseGoalDetailResponse detail = changedConfig.getGoal(goal.getId(), owner.getId());
+        List<PurchaseGoalResponse> list = changedConfig.getMyGoals(owner.getId());
+
+        assertThat(detail.capRatio()).isEqualTo(3.0);
+        assertThat(list).extracting(PurchaseGoalResponse::capRatio).containsExactly(3.0);
+        assertThat(detail.participations())
+                .extracting(PurchaseGoalParticipationResponse::estimatedPriceAtEngage, PurchaseGoalParticipationResponse::autoBidCap)
+                .containsExactly(tuple(20000L, 40000L));
     }
 }

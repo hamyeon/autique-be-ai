@@ -3,6 +3,7 @@ package com.vintic.backend.notification.service;
 import com.vintic.backend.notification.domain.Notification;
 import com.vintic.backend.notification.domain.NotificationType;
 import com.vintic.backend.notification.repository.NotificationRepository;
+import com.vintic.backend.purchasegoal.domain.PurchaseGoalStatus;
 import com.vintic.backend.user.domain.User;
 import org.springframework.stereotype.Component;
 
@@ -60,13 +61,17 @@ public class NotificationRecorder {
         );
     }
 
-    // stillSearching=true(ACTIVE로 복귀, deadline 전)와 false(EXPIRED/CANCELLED로 종료)는
-    // 문구를 구분한다 - 계속 찾는 중인지, 이제 끝났는지는 사용자가 다음에 뭘 해야 할지가 다르다.
-    public Notification recordPurchaseAgentLost(User recipient, Long goalId, Long auctionId, boolean stillSearching) {
+    // resultingStatus: 패배 관찰이 실제로 만든 Goal의 다음 상태. 종료 사유가 셋(계속 탐색/마감 경과/취소 요청)이라
+    // 불리언 하나로는 구분할 수 없어, 호출자(PurchaseGoalResultObservationService)가 조건부 UPDATE로 실제
+    // 전이시킨 상태를 그대로 넘긴다. 패배 결과가 될 수 없는 상태(ENGAGED/FULFILLED 등)는 호출 오류다.
+    public Notification recordPurchaseAgentLost(User recipient, Long goalId, Long auctionId, PurchaseGoalStatus resultingStatus) {
         String businessEventKey = NotificationType.PURCHASE_AGENT_LOST.name() + ":" + goalId + ":" + auctionId;
-        String body = stillSearching
-                ? "이번 경매는 낙찰하지 못했습니다. 계속해서 조건에 맞는 경매를 찾고 있습니다."
-                : "이번 경매는 낙찰하지 못했습니다. 더 이상 참여할 수 있는 경매가 없어 구매 대행을 종료합니다.";
+        String body = switch (resultingStatus) {
+            case ACTIVE -> "이번 경매는 낙찰하지 못했습니다. 계속해서 조건에 맞는 경매를 찾고 있습니다.";
+            case EXPIRED -> "이번 경매는 낙찰하지 못했습니다. 구매 목표의 마감 시간이 지나 구매 대행을 종료합니다.";
+            case CANCELLED -> "이번 경매는 낙찰하지 못했습니다. 취소 요청에 따라 구매 대행을 종료합니다.";
+            default -> throw new IllegalArgumentException("패배 결과가 될 수 없는 Goal 상태입니다: " + resultingStatus);
+        };
         return save(
                 recipient, NotificationType.PURCHASE_AGENT_LOST, auctionId, goalId, businessEventKey,
                 "구매 대행이 낙찰하지 못했습니다", body

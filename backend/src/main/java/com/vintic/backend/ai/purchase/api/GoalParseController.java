@@ -3,6 +3,7 @@ package com.vintic.backend.ai.purchase.api;
 import com.vintic.backend.ai.purchase.dto.GoalDraft;
 import com.vintic.backend.ai.purchase.parser.GoalParser;
 import com.vintic.backend.common.dto.ApiResponse;
+import com.vintic.backend.purchasegoal.service.PurchaseGoalCapPolicy;
 import io.swagger.v3.oas.annotations.Operation;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -25,14 +26,17 @@ import org.springframework.web.bind.annotation.RestController;
 public class GoalParseController {
 
     private final GoalParser goalParser;
+    private final PurchaseGoalCapPolicy capPolicy;
 
     @Operation(summary = "자연어 구매 목표 파싱",
             description = "\"뉴발 990, A급 이상, 15만원 이하로 하나\" 같은 문장을 구조화된 GoalDraft 초안으로 바꾼다. "
                     + "DB 저장 없음. 응답은 초안이며 사용자 확인·수정 후 POST /api/purchase-goals로 확정한다. "
-                    + "AI 해석에 실패하면 규칙 기반 초안을 warnings와 함께 돌려준다(빈 폼 fallback은 프론트 몫).")
+                    + "AI 해석에 실패하면 규칙 기반 초안을 warnings와 함께 돌려준다(빈 폼 fallback은 프론트 몫). "
+                    + "capRatio는 AI 결과가 아니라 서버의 현재 상한 배수 설정값이다.")
     @PostMapping("/parse")
-    public ResponseEntity<ApiResponse<GoalDraft>> parse(@Valid @RequestBody GoalParseRequest request) {
+    public ResponseEntity<ApiResponse<GoalParseResponse>> parse(@Valid @RequestBody GoalParseRequest request) {
         GoalDraft draft = goalParser.parse(request.text());
-        return ResponseEntity.ok(ApiResponse.success(draft));
+        // capRatio는 파서가 아니라 여기서 설정값으로 채운다(AI가 만들거나 바꿀 수 없다).
+        return ResponseEntity.ok(ApiResponse.success(GoalParseResponse.from(draft, capPolicy.capRatio())));
     }
 }

@@ -77,7 +77,7 @@ public class PurchaseGoalEngagementService {
         try {
             PurchaseGoalEngagementResult result = engagementTransactionService.engage(
                     goal.getId(), auction.getId(), goal.getUser().getId(), cap,
-                    PriceRatio.engagementNote(minNextBid, estimatedPrice, cap));
+                    PriceRatio.engagementNote(minNextBid, estimatedPrice, cap), (long) estimatedPrice);
             if (result.engaged()) {
                 log.info("Purchase Agent 참여 - goalId={}, auctionId={}, autoBidSettingId={}, {}",
                         goal.getId(), auction.getId(), result.autoBidSettingId(), priceSummary);

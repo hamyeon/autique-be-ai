@@ -29,7 +29,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 // (AutoBidCommandServiceTest와 동일한 관례). Clock은 TestClockConfig로 고정해
 // "마감 시각이 실제로 미래인지"를 결정적으로 검증한다.
 @DataJpaTest
-@Import({PurchaseGoalCommandService.class, TestClockConfig.class})
+@Import({PurchaseGoalCommandService.class, PurchaseGoalCapPolicy.class, TestClockConfig.class})
 class PurchaseGoalCommandServiceTest {
 
     @Autowired
@@ -80,6 +80,8 @@ class PurchaseGoalCommandServiceTest {
         assertThat(response.currentAuctionId()).isNull();
         assertThat(response.minCondition()).isEqualTo("A");
         assertThat(purchaseGoalRepository.findById(response.id())).isPresent();
+        // PurchaseGoalCapPolicy가 실제로 쓰는 설정값(기본 2.0)과 같아야 한다.
+        assertThat(response.capRatio()).isEqualTo(2.0);
     }
 
     @Test

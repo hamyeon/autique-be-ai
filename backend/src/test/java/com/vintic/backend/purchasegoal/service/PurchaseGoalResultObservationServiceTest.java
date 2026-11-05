@@ -27,6 +27,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 
 // Day 6 phase 2(결과 관찰) + Day 7 PURCHASE_AGENT_LOST/기존 AUCTION_WON 재사용을 함께 검증한다.
 // phase 1(만료)/phase 3(탐색·참여)는 각자 다른 테스트에서 본다.
@@ -38,6 +39,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 class PurchaseGoalResultObservationServiceTest {
 
     private static final LocalDateTime FIXED_NOW = LocalDateTime.ofInstant(TestClockConfig.FIXED_INSTANT, ClockConfig.APP_ZONE);
+
+    private static final String BODY_STILL_SEARCHING = "이번 경매는 낙찰하지 못했습니다. 계속해서 조건에 맞는 경매를 찾고 있습니다.";
+    private static final String BODY_GOAL_EXPIRED = "이번 경매는 낙찰하지 못했습니다. 구매 목표의 마감 시간이 지나 구매 대행을 종료합니다.";
+    private static final String BODY_CANCEL_REQUESTED = "이번 경매는 낙찰하지 못했습니다. 취소 요청에 따라 구매 대행을 종료합니다.";
 
     @Autowired
     private PurchaseGoalResultObservationService resultObservationService;
@@ -166,7 +171,7 @@ class PurchaseGoalResultObservationServiceTest {
         assertThat(notification.getType()).isEqualTo(NotificationType.PURCHASE_AGENT_LOST);
         assertThat(notification.getBusinessEventKey()).isEqualTo("PURCHASE_AGENT_LOST:" + goal.getId() + ":" + auction.getId());
         // ACTIVE로 복귀(계속 탐색) 문구여야 한다 - "종료" 문구가 아니다.
-        assertThat(notification.getBody()).contains("찾고 있습니다");
+        assertThat(notification.getBody()).isEqualTo(BODY_STILL_SEARCHING);
     }
 
     @Test
@@ -183,8 +188,8 @@ class PurchaseGoalResultObservationServiceTest {
 
         Notification notification = notificationRepository.findAll().get(0);
         assertThat(notification.getBusinessEventKey()).isEqualTo("PURCHASE_AGENT_LOST:" + goal.getId() + ":" + auction.getId());
-        // 종료(더 이상 참여 불가) 문구여야 한다 - "계속 찾는다" 문구와 달라야 한다.
-        assertThat(notification.getBody()).contains("종료합니다");
+        // 마감 경과로 인한 종료 문구여야 한다 - "계속 찾는다"나 "취소 요청" 문구와 달라야 한다.
+        assertThat(notification.getBody()).isEqualTo(BODY_GOAL_EXPIRED);
     }
 
     @Test
@@ -231,6 +236,34 @@ class PurchaseGoalResultObservationServiceTest {
         Notification notification = notificationRepository.findAll().get(0);
         assertThat(notification.getType()).isEqualTo(NotificationType.PURCHASE_AGENT_LOST);
         assertThat(notification.getBusinessEventKey()).isEqualTo("PURCHASE_AGENT_LOST:" + goal.getId() + ":" + auction.getId());
+        // 사용자가 직접 취소 요청한 경우다 - "마감 시간이 지나" 문구가 나가면 안 된다(deadline이 지났어도).
+        assertThat(notification.getBody()).isEqualTo(BODY_CANCEL_REQUESTED);
+    }
+
+    @Test
+    void EXPIRED와_CANCELLED_종료도_다시_관찰하면_LOST_알림을_중복으로_만들지_않는다() {
+        User seller = persistUser("seller12@vintic.local");
+        User expiredOwner = persistUser("buyer12@vintic.local");
+        User cancelOwner = persistUser("buyer13@vintic.local");
+        Auction expiredAuction = persistEndedAuction(persistProduct(seller));
+        Auction cancelAuction = persistEndedAuction(persistProduct(seller));
+        PurchaseGoal expiredGoal = persistGoal(expiredOwner, PurchaseGoalStatus.ENGAGED, expiredAuction.getId(), FIXED_NOW.minusMinutes(1));
+        PurchaseGoal cancelGoal = persistGoal(cancelOwner, PurchaseGoalStatus.CANCEL_REQUESTED, cancelAuction.getId(), FIXED_NOW.plusDays(1));
+        flushAndClear();
+
+        resultObservationService.observeIfDue(expiredGoal.getId());
+        resultObservationService.observeIfDue(cancelGoal.getId());
+        resultObservationService.observeIfDue(expiredGoal.getId());
+        resultObservationService.observeIfDue(cancelGoal.getId());
+
+        assertThat(purchaseGoalRepository.findById(expiredGoal.getId()).orElseThrow().getStatus()).isEqualTo(PurchaseGoalStatus.EXPIRED);
+        assertThat(purchaseGoalRepository.findById(cancelGoal.getId()).orElseThrow().getStatus()).isEqualTo(PurchaseGoalStatus.CANCELLED);
+        assertThat(notificationRepository.findAll())
+                .extracting(Notification::getBusinessEventKey, Notification::getBody)
+                .containsExactlyInAnyOrder(
+                        tuple("PURCHASE_AGENT_LOST:" + expiredGoal.getId() + ":" + expiredAuction.getId(), BODY_GOAL_EXPIRED),
+                        tuple("PURCHASE_AGENT_LOST:" + cancelGoal.getId() + ":" + cancelAuction.getId(), BODY_CANCEL_REQUESTED)
+                );
     }
 
     @Test

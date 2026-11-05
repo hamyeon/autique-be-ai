@@ -24,9 +24,13 @@ public record PurchaseGoalDetailResponse(
         OffsetDateTime createdAt,
         int participationCount,
         int wonCount,
-        List<PurchaseGoalParticipationResponse> participations
+        List<PurchaseGoalParticipationResponse> participations,
+        // PurchaseGoalResponse.capRatio와 같은 의미(현재 적용 중인 상한 배수 설정).
+        double capRatio
 ) {
-    public static PurchaseGoalDetailResponse from(PurchaseGoal goal, List<PurchaseGoalParticipationResponse> participations) {
+    public static PurchaseGoalDetailResponse from(
+            PurchaseGoal goal, List<PurchaseGoalParticipationResponse> participations, double capRatio
+    ) {
         int wonCount = (int) participations.stream().filter(p -> "WON".equals(p.status())).count();
         return new PurchaseGoalDetailResponse(
                 goal.getId(),
@@ -44,7 +48,8 @@ public record PurchaseGoalDetailResponse(
                 TimePolicy.toApiTime(goal.getCreatedAt()),
                 participations.size(),
                 wonCount,
-                participations
+                participations,
+                capRatio
         );
     }
 }

@@ -49,7 +49,7 @@ class PurchaseGoalControllerTest {
         PurchaseGoalResponse response = new PurchaseGoalResponse(
                 1L, 2L, "New Balance", "nb990", "뉴발란스 990", "A",
                 270, 150000L, "박스 있으면 좋음", OffsetDateTime.now().plusDays(7),
-                "ACTIVE", null, OffsetDateTime.now(), 0, 0
+                "ACTIVE", null, OffsetDateTime.now(), 0, 0, 2.0
         );
         when(purchaseGoalCommandService.createGoal(any(), eq(2L))).thenReturn(response);
 
@@ -62,7 +62,9 @@ class PurchaseGoalControllerTest {
                 .andExpect(jsonPath("$.data.id").value(1))
                 .andExpect(jsonPath("$.data.userId").value(2))
                 .andExpect(jsonPath("$.data.status").value("ACTIVE"))
-                .andExpect(jsonPath("$.data.currentAuctionId").doesNotExist());
+                .andExpect(jsonPath("$.data.currentAuctionId").doesNotExist())
+                // 숫자형으로 내려가야 프론트가 문장 파싱 없이 "최대 N배"를 표시할 수 있다.
+                .andExpect(jsonPath("$.data.capRatio").value(2.0));
     }
 
     @Test
@@ -70,7 +72,7 @@ class PurchaseGoalControllerTest {
         PurchaseGoalResponse response = new PurchaseGoalResponse(
                 1L, 7L, "New Balance", "nb990", "뉴발란스 990", "A",
                 270, 150000L, null, OffsetDateTime.now().plusDays(7),
-                "ACTIVE", null, OffsetDateTime.now(), 0, 0
+                "ACTIVE", null, OffsetDateTime.now(), 0, 0, 2.0
         );
         when(purchaseGoalCommandService.createGoal(any(), eq(7L))).thenReturn(response);
 
@@ -122,7 +124,7 @@ class PurchaseGoalControllerTest {
         PurchaseGoalResponse response = new PurchaseGoalResponse(
                 1L, 2L, null, "nb990", "뉴발란스 990", "A",
                 null, 150000L, null, OffsetDateTime.now().plusDays(7),
-                "ACTIVE", null, OffsetDateTime.now(), 0, 0
+                "ACTIVE", null, OffsetDateTime.now(), 0, 0, 2.0
         );
         when(purchaseGoalCommandService.createGoal(any(), eq(2L))).thenReturn(response);
 

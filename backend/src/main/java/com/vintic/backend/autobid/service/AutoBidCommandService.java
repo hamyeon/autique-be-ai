@@ -101,6 +101,15 @@ public class AutoBidCommandService {
     // AutoBidSetting.reserve()에 purchaseGoalId를 함께 저장하는 것만 다르다.
     @Transactional
     public AutoBidRegisterResponse createAutoBid(Long auctionId, Long userId, Long maxAmount, Long idempotencyId, Long purchaseGoalId) {
+        return createAutoBid(auctionId, userId, maxAmount, idempotencyId, purchaseGoalId, null);
+    }
+
+    // estimatedPriceAtEngage: Purchase Agent가 이 maxAmount(cap)를 계산할 때 쓴 서버 시세 스냅샷.
+    // purchaseGoalId가 있을 때만 의미가 있고, AutoBid 행과 같은 INSERT로 저장된다.
+    @Transactional
+    public AutoBidRegisterResponse createAutoBid(
+            Long auctionId, Long userId, Long maxAmount, Long idempotencyId, Long purchaseGoalId, Long estimatedPriceAtEngage
+    ) {
         Auction auction = auctionRepository.findByIdForUpdate(auctionId)
                 .orElseThrow(() -> new AuctionNotFoundException("존재하지 않는 경매입니다. auctionId: " + auctionId));
         User user = userRepository.findById(userId)
@@ -137,7 +146,7 @@ public class AutoBidCommandService {
 
         AutoBidSetting setting = purchaseGoalId == null
                 ? AutoBidSetting.reserve(auction, user, maxAmount)
-                : AutoBidSetting.reserve(auction, user, maxAmount, purchaseGoalId);
+                : AutoBidSetting.reserve(auction, user, maxAmount, purchaseGoalId, estimatedPriceAtEngage);
 
         boolean bidOccurred = false;
         Long resultingBidAmount = null;

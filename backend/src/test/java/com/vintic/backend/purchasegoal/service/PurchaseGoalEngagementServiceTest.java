@@ -108,14 +108,16 @@ class PurchaseGoalEngagementServiceTest {
         Auction auction = auction(1L);
         PurchaseGoal goal = goal(1L, 150000L); // hardMaxAmount < 새 시세
         when(priceEstimateProvider.estimate(any())).thenReturn(Optional.of(freshEstimate(300000)));
-        when(transactionService.engage(eq(1L), eq(1L), eq(10L), eq(150000L), any()))
+        when(transactionService.engage(eq(1L), eq(1L), eq(10L), eq(150000L), any(), any()))
                 .thenReturn(PurchaseGoalEngagementResult.engaged(1L, 99L));
 
         PurchaseGoalEngagementResult result = engagementService.attemptEngage(goal, Optional.of(candidate(auction)));
 
         assertThat(result.engaged()).isTrue();
         assertThat(result.autoBidSettingId()).isEqualTo(99L);
-        verify(transactionService).engage(eq(1L), eq(1L), eq(10L), eq(150000L), any());
+        // 실제 상한은 예산으로 제한되고(시세 x 2 = 600,000보다 낮음), 스냅샷은 Day 4 값(999,999,999)이 아니라
+        // 상한 계산에 실제로 쓴 재확인 시세다.
+        verify(transactionService).engage(eq(1L), eq(1L), eq(10L), eq(150000L), any(), eq(300000L));
     }
 
     @Test
@@ -123,14 +125,14 @@ class PurchaseGoalEngagementServiceTest {
         // 경매: 현재가 100,000 + 호가 5,000 -> 다음 입찰가 105,000. 시세 70,000 -> 상한 = min(500,000, 140,000)
         Auction auction = auction(1L);
         when(priceEstimateProvider.estimate(any())).thenReturn(Optional.of(freshEstimate(70000)));
-        when(transactionService.engage(eq(1L), eq(1L), eq(10L), eq(140000L), any()))
+        when(transactionService.engage(eq(1L), eq(1L), eq(10L), eq(140000L), any(), any()))
                 .thenReturn(PurchaseGoalEngagementResult.engaged(1L, 99L));
 
         PurchaseGoalEngagementResult result = engagementService.attemptEngage(goal(1L, 500000L), Optional.of(candidate(auction)));
 
         assertThat(result.engaged()).isTrue();
         ArgumentCaptor<String> note = ArgumentCaptor.forClass(String.class);
-        verify(transactionService).engage(eq(1L), eq(1L), eq(10L), eq(140000L), note.capture());
+        verify(transactionService).engage(eq(1L), eq(1L), eq(10L), eq(140000L), note.capture(), eq(70000L));
         assertThat(note.getValue())
                 .contains("다음 입찰가 105,000원은 AI 시세(70,000원)의 1.5배입니다")
                 .contains("최대 140,000원(시세의 2배)");
@@ -153,7 +155,7 @@ class PurchaseGoalEngagementServiceTest {
     void 트랜잭션_서비스가_예외를_던지면_잡아서_참여하지_않음으로_바꾼다() {
         Auction auction = auction(1L);
         when(priceEstimateProvider.estimate(any())).thenReturn(Optional.of(freshEstimate(300000)));
-        when(transactionService.engage(any(), any(), any(), anyLong(), any()))
+        when(transactionService.engage(any(), any(), any(), anyLong(), any(), any()))
                 .thenThrow(new AuctionClosedException("이미 종료되었거나 취소된 경매입니다."));
 
         PurchaseGoalEngagementResult result = engagementService.attemptEngage(goal(1L, 500000L), Optional.of(candidate(auction)));

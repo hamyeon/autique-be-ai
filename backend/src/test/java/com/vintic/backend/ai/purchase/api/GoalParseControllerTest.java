@@ -3,10 +3,13 @@ package com.vintic.backend.ai.purchase.api;
 import com.vintic.backend.ai.purchase.dto.GoalCondition;
 import com.vintic.backend.ai.purchase.dto.GoalDraft;
 import com.vintic.backend.ai.purchase.parser.GoalParser;
+import com.vintic.backend.purchasegoal.service.PurchaseGoalCapPolicy;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -22,7 +25,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 // POST /api/purchase-goals/parse 의 요청/응답 형식 회귀 테스트. 파서 자체는 mock이다.
+// capRatio가 하드코딩(2.0)이 아니라 설정값에서 온다는 것을 보이려고 기본값과 다른 2.5로 띄운다.
 @WebMvcTest(GoalParseController.class)
+@Import(PurchaseGoalCapPolicy.class)
+@TestPropertySource(properties = "purchase-agent.cap-ratio=2.5")
 class GoalParseControllerTest {
 
     @Autowired
@@ -54,6 +60,8 @@ class GoalParseControllerTest {
                 .andExpect(jsonPath("$.data.freeTextConditions").doesNotExist())
                 .andExpect(jsonPath("$.data.confidence").value(0.9))
                 .andExpect(jsonPath("$.data.warnings[0]").isString())
+                // 파서 결과가 아니라 응답 조립 단계에서 PurchaseGoalCapPolicy의 실제 설정값을 넣는다.
+                .andExpect(jsonPath("$.data.capRatio").value(2.5))
                 .andExpect(jsonPath("$.error").doesNotExist());
     }
 
