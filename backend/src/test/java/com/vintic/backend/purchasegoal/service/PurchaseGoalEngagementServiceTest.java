@@ -10,6 +10,7 @@ import com.vintic.backend.product.domain.Product;
 import com.vintic.backend.purchasegoal.domain.PurchaseGoal;
 import com.vintic.backend.user.domain.User;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.LocalDateTime;
@@ -33,7 +34,7 @@ class PurchaseGoalEngagementServiceTest {
     private final PriceEstimateProvider priceEstimateProvider = mock(PriceEstimateProvider.class);
     private final PurchaseGoalEngagementTransactionService transactionService = mock(PurchaseGoalEngagementTransactionService.class);
     private final PurchaseGoalEngagementService engagementService =
-            new PurchaseGoalEngagementService(priceEstimateProvider, transactionService);
+            new PurchaseGoalEngagementService(priceEstimateProvider, transactionService, new PurchaseGoalCapPolicy(2.0));
 
     private PurchaseGoal goal(Long id, long hardMaxAmount) {
         User user = User.register("buyer@vintic.local", "buyer", null);
@@ -107,21 +108,52 @@ class PurchaseGoalEngagementServiceTest {
         Auction auction = auction(1L);
         PurchaseGoal goal = goal(1L, 150000L); // hardMaxAmount < 새 시세
         when(priceEstimateProvider.estimate(any())).thenReturn(Optional.of(freshEstimate(300000)));
-        when(transactionService.engage(eq(1L), eq(1L), eq(10L), eq(150000L)))
+        when(transactionService.engage(eq(1L), eq(1L), eq(10L), eq(150000L), any()))
                 .thenReturn(PurchaseGoalEngagementResult.engaged(1L, 99L));
 
         PurchaseGoalEngagementResult result = engagementService.attemptEngage(goal, Optional.of(candidate(auction)));
 
         assertThat(result.engaged()).isTrue();
         assertThat(result.autoBidSettingId()).isEqualTo(99L);
-        verify(transactionService).engage(1L, 1L, 10L, 150000L);
+        verify(transactionService).engage(eq(1L), eq(1L), eq(10L), eq(150000L), any());
+    }
+
+    @Test
+    void 상한은_시세의_2배까지이고_알림에_시세_대비_배수를_넘긴다() {
+        // 경매: 현재가 100,000 + 호가 5,000 -> 다음 입찰가 105,000. 시세 70,000 -> 상한 = min(500,000, 140,000)
+        Auction auction = auction(1L);
+        when(priceEstimateProvider.estimate(any())).thenReturn(Optional.of(freshEstimate(70000)));
+        when(transactionService.engage(eq(1L), eq(1L), eq(10L), eq(140000L), any()))
+                .thenReturn(PurchaseGoalEngagementResult.engaged(1L, 99L));
+
+        PurchaseGoalEngagementResult result = engagementService.attemptEngage(goal(1L, 500000L), Optional.of(candidate(auction)));
+
+        assertThat(result.engaged()).isTrue();
+        ArgumentCaptor<String> note = ArgumentCaptor.forClass(String.class);
+        verify(transactionService).engage(eq(1L), eq(1L), eq(10L), eq(140000L), note.capture());
+        assertThat(note.getValue())
+                .contains("다음 입찰가 105,000원은 AI 시세(70,000원)의 1.5배입니다")
+                .contains("최대 140,000원(시세의 2배)");
+    }
+
+    @Test
+    void 재확인한_상한이_최소_입찰가보다_낮으면_트랜잭션을_열지_않는다() {
+        // 시세 50,000 × 2 = 100,000 < 다음 입찰가 105,000
+        Auction auction = auction(1L);
+        when(priceEstimateProvider.estimate(any())).thenReturn(Optional.of(freshEstimate(50000)));
+
+        PurchaseGoalEngagementResult result = engagementService.attemptEngage(goal(1L, 500000L), Optional.of(candidate(auction)));
+
+        assertThat(result.engaged()).isFalse();
+        assertThat(result.reason()).contains("상한");
+        verifyNoInteractions(transactionService);
     }
 
     @Test
     void 트랜잭션_서비스가_예외를_던지면_잡아서_참여하지_않음으로_바꾼다() {
         Auction auction = auction(1L);
         when(priceEstimateProvider.estimate(any())).thenReturn(Optional.of(freshEstimate(300000)));
-        when(transactionService.engage(any(), any(), any(), anyLong()))
+        when(transactionService.engage(any(), any(), any(), anyLong(), any()))
                 .thenThrow(new AuctionClosedException("이미 종료되었거나 취소된 경매입니다."));
 
         PurchaseGoalEngagementResult result = engagementService.attemptEngage(goal(1L, 500000L), Optional.of(candidate(auction)));

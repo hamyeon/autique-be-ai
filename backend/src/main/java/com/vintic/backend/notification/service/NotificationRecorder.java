@@ -43,10 +43,20 @@ public class NotificationRecorder {
     // 포함해야 (goal, auction) 쌍마다 독립된 알림이 된다. resourceId는 다른 타입과 동일하게
     // "화면 이동용 ID" 역할이며 여기서는 Goal 상세로 이동하도록 goalId를 쓴다.
     public Notification recordPurchaseAgentEngaged(User recipient, Long goalId, Long auctionId) {
+        return recordPurchaseAgentEngaged(recipient, goalId, auctionId, null);
+    }
+
+    // priceNote: "다음 입찰가 30,000원은 AI 시세(20,000원)의 1.5배입니다. 최대 40,000원(시세의 2배)까지 ..."
+    // 에이전트가 시세보다 비싸게 입찰할 수 있으므로(cap = 시세 × 배율) 그 사실을 알림에서 숨기지 않는다.
+    public Notification recordPurchaseAgentEngaged(User recipient, Long goalId, Long auctionId, String priceNote) {
         String businessEventKey = NotificationType.PURCHASE_AGENT_ENGAGED.name() + ":" + goalId + ":" + auctionId;
+        String body = "설정하신 조건에 맞는 경매를 찾아 자동입찰을 등록했습니다.";
+        if (priceNote != null && !priceNote.isBlank()) {
+            body = body + " " + priceNote;
+        }
         return save(
                 recipient, NotificationType.PURCHASE_AGENT_ENGAGED, auctionId, goalId, businessEventKey,
-                "구매 대행이 입찰을 시작했습니다", "설정하신 조건에 맞는 경매를 찾아 자동입찰을 등록했습니다."
+                "구매 대행이 입찰을 시작했습니다", body
         );
     }
 

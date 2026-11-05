@@ -30,9 +30,6 @@ import java.util.stream.Collectors;
 @Slf4j
 public class PurchaseGoalCandidateRanker {
 
-    // 설계안 5-2 초기값. cap = min(hardMaxAmount, 서버 시세 * CAP_RATIO).
-    private static final double CAP_RATIO = 1.0;
-
     private static final Comparator<PurchaseGoalRankedCandidate> RANKING_ORDER =
             Comparator.<PurchaseGoalRankedCandidate>comparingDouble(PurchaseGoalCandidateRanker::discountRate).reversed()
                     .thenComparing(candidate -> candidate.auction().getEndAt())
@@ -42,15 +39,18 @@ public class PurchaseGoalCandidateRanker {
 
     private final ListingMatcher listingMatcher;
     private final PurchaseGoalMatchRepository purchaseGoalMatchRepository;
+    private final PurchaseGoalCapPolicy capPolicy;
     private final Clock clock;
 
     public PurchaseGoalCandidateRanker(
             ListingMatcher listingMatcher,
             PurchaseGoalMatchRepository purchaseGoalMatchRepository,
+            PurchaseGoalCapPolicy capPolicy,
             Clock clock
     ) {
         this.listingMatcher = listingMatcher;
         this.purchaseGoalMatchRepository = purchaseGoalMatchRepository;
+        this.capPolicy = capPolicy;
         this.clock = clock;
     }
 
@@ -71,22 +71,44 @@ public class PurchaseGoalCandidateRanker {
         MatchGoal matchGoal = new MatchGoal(goal.getModelKey(), goal.getModelQuery(), goal.getBrand(), goal.getFreeTextConditions());
 
         List<PurchaseGoalRankedCandidate> ranked = new ArrayList<>();
+        int matcherFailed = 0;
+        int unmatched = 0;
+        int capTooLow = 0;
         for (PurchaseGoalCandidate candidate : candidates) {
             Auction auction = candidate.auction();
             MatchResult matchResult = resolveMatchResult(goal, matchGoal, auction, cachedByAuctionId.get(auction.getId()));
-            if (matchResult == null || !matchResult.matched()) {
+            if (matchResult == null) {
+                matcherFailed++; // 실패 로그는 resolveMatchResult가 남긴다
+                continue;
+            }
+            if (!matchResult.matched()) {
+                unmatched++;
+                log.info("Purchase Agent 후보 제외 - goalId={}, auctionId={}, 사유=Matcher 불일치, 판정={}",
+                        goal.getId(), auction.getId(), matchResult.reason());
                 continue;
             }
 
-            long cap = computeCap(goal, candidate.priceEstimate());
+            int estimatedPrice = candidate.priceEstimate().estimatedPrice();
+            long cap = capPolicy.cap(goal.getHardMaxAmount(), estimatedPrice);
             if (cap < auction.getMinNextBidAmount()) {
+                capTooLow++;
+                // "조용히 빠지는" 대표 경로였다. 예산이 넉넉해도 시세 × 배율이 다음 입찰가보다 낮으면 여기서 빠진다.
+                log.info("Purchase Agent 후보 제외 - goalId={}, auctionId={}, 사유=상한 < 최소 입찰가, "
+                                + "예산={}, 시세={}, 상한={}(시세 × {}), 최소 입찰가={}(시세의 {}배)",
+                        goal.getId(), auction.getId(), goal.getHardMaxAmount(), estimatedPrice, cap,
+                        capPolicy.capRatio(), auction.getMinNextBidAmount(),
+                        PriceRatio.format(auction.getMinNextBidAmount(), estimatedPrice));
                 continue;
             }
 
             ranked.add(new PurchaseGoalRankedCandidate(auction, candidate.priceEstimate(), matchResult, cap));
         }
 
-        return ranked.stream().min(RANKING_ORDER);
+        Optional<PurchaseGoalRankedCandidate> top = ranked.stream().min(RANKING_ORDER);
+        log.info("Purchase Agent 후보 순위 - goalId={}, 후보 {}건 (Matcher 실패 {}, 불일치 {}, 상한 미달 {}) -> 선택 auctionId={}",
+                goal.getId(), candidates.size(), matcherFailed, unmatched, capTooLow,
+                top.map(c -> c.auction().getId()).orElse(null));
+        return top;
     }
 
     // 캐시 hit면 matched=false 이력도 그대로 재사용한다(Matcher 재호출 없음). 캐시 miss면 Matcher를
@@ -126,10 +148,7 @@ public class PurchaseGoalCandidateRanker {
     // bidIncrement 그리드 정렬(EffectiveCapCalculator)과 update 전용 규칙(CapNotIncreasedException)은
     // 여기서 만드는 cap이 신규 후보 평가값일 뿐 실제 등록/수정이 아니라 적용 대상이 아니다.
     // Product.recommendedPrice(판매자 입력값)는 쓰지 않는다 - PriceEstimateProvider의 서버 시세만 근거로 삼는다.
-    private long computeCap(PurchaseGoal goal, PriceEstimate priceEstimate) {
-        long capByEstimate = (long) Math.floor(priceEstimate.estimatedPrice() * CAP_RATIO);
-        return Math.min(goal.getHardMaxAmount(), capByEstimate);
-    }
+    // cap 식 자체는 PurchaseGoalCapPolicy에 있다(참여 직전 재확인과 같은 식을 써야 하므로).
 
     // (서버 시세 - 현재가) / 서버 시세. Day 3가 estimatedPrice>0인 시세만 후보에 남기므로 0으로
     // 나눌 일은 없다.

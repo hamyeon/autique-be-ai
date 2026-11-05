@@ -20,7 +20,9 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -33,6 +35,14 @@ import java.util.Set;
 public class PurchaseGoalCandidateFinder {
 
     private static final Duration SCHEDULED_WINDOW = Duration.ofHours(24);
+
+    // 후보 제외 사유 - 로그에 그대로 찍힌다
+    static final String SKIP_ALREADY_MANAGED = "이미 자동입찰 등록됨";
+    static final String SKIP_MODEL = "모델·브랜드 불일치";
+    static final String SKIP_GRADE = "등급 미달";
+    static final String SKIP_SIZE = "사이즈 불일치";
+    static final String SKIP_BUDGET = "예산 < 최소 입찰가";
+    static final String SKIP_NO_ESTIMATE = "서버 시세 없음";
 
     private final AuctionRepository auctionRepository;
     private final AutoBidSettingRepository autoBidSettingRepository;
@@ -72,44 +82,69 @@ public class PurchaseGoalCandidateFinder {
         Set<Long> alreadyManaged = Set.copyOf(autoBidSettingRepository
                 .findAuctionIdsWithExistingSetting(goal.getUser().getId(), auctionIds));
 
+        // 제외 사유별 집계. 모델·브랜드 불일치는 경매 전체가 대상이라 건별로 찍으면 로그가 넘친다 -
+        // 개수만 센다. 모델이 맞은 뒤의 제외(등급·사이즈·예산·시세)는 "왜 이 매물에 안 들어갔나"를
+        // 추적해야 하는 지점이라 건별로 남긴다.
+        Map<String, Integer> skipped = new LinkedHashMap<>();
         List<PurchaseGoalCandidate> candidates = new ArrayList<>();
         for (Auction auction : timeWindowCandidates) {
             if (alreadyManaged.contains(auction.getId())) {
+                skipped.merge(SKIP_ALREADY_MANAGED, 1, Integer::sum);
                 continue;
             }
             Product product = auction.getProduct();
-            if (!matchesGoal(goal, product)) {
+            String rejectReason = rejectReason(goal, product);
+            if (rejectReason != null) {
+                skipped.merge(rejectReason, 1, Integer::sum);
+                if (!SKIP_MODEL.equals(rejectReason)) {
+                    log.info("Purchase Agent 후보 제외 - goalId={}, auctionId={}, 사유={}, 매물 등급={}, 사이즈={} (요청 최소 등급={}, 사이즈={})",
+                            goal.getId(), auction.getId(), rejectReason, product.getConditionGrade(), product.getSizeKr(),
+                            goal.getMinCondition(), goal.getSizeKr());
+                }
                 continue;
             }
             if (goal.getHardMaxAmount() < auction.getMinNextBidAmount()) {
+                skipped.merge(SKIP_BUDGET, 1, Integer::sum);
+                log.info("Purchase Agent 후보 제외 - goalId={}, auctionId={}, 사유={}, 예산={}, 최소 입찰가={}",
+                        goal.getId(), auction.getId(), SKIP_BUDGET, goal.getHardMaxAmount(), auction.getMinNextBidAmount());
                 continue;
             }
-            estimatePrice(product).ifPresent(estimate -> candidates.add(new PurchaseGoalCandidate(auction, estimate)));
+            Optional<PriceEstimate> estimate = estimatePrice(product);
+            if (estimate.isEmpty()) {
+                skipped.merge(SKIP_NO_ESTIMATE, 1, Integer::sum);
+                log.info("Purchase Agent 후보 제외 - goalId={}, auctionId={}, 사유={}, brand={}, model={}",
+                        goal.getId(), auction.getId(), SKIP_NO_ESTIMATE, product.getBrand(), product.getModel());
+                continue;
+            }
+            candidates.add(new PurchaseGoalCandidate(auction, estimate.get()));
         }
+        log.info("Purchase Agent 후보 탐색 - goalId={}, 검토 경매 {}건, 제외 {}, 후보 {}건",
+                goal.getId(), timeWindowCandidates.size(), skipped, candidates.size());
         return candidates;
     }
 
-    private boolean matchesGoal(PurchaseGoal goal, Product product) {
+    // 통과면 null, 아니면 제외 사유.
+    private String rejectReason(PurchaseGoal goal, Product product) {
         if (goal.getModelKey() != null) {
             Optional<ModelAliases.Match> match = modelAliases.find(joinBrandModel(product));
             if (match.isEmpty() || !match.get().model().modelKey().equalsIgnoreCase(goal.getModelKey())) {
-                return false;
+                return SKIP_MODEL;
             }
         } else if (goal.getBrand() != null && !brandMatches(goal.getBrand(), product.getBrand())) {
-            return false;
+            return SKIP_MODEL;
         }
 
         Optional<GoalCondition> listingGrade = GoalCondition.fromLabel(product.getConditionGrade());
         if (listingGrade.isEmpty() || !goal.getMinCondition().satisfiedBy(listingGrade.get())) {
-            return false;
+            return SKIP_GRADE;
         }
 
         if (goal.getSizeKr() != null
                 && (product.getSizeKr() == null || !goal.getSizeKr().equals(product.getSizeKr()))) {
-            return false;
+            return SKIP_SIZE;
         }
 
-        return true;
+        return null;
     }
 
     // BrandAliases.canonical()로 둘 다 정규화되면 그 결과로 비교한다(예: "뉴발" == "New Balance").

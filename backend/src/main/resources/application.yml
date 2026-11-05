@@ -139,6 +139,9 @@ purchase-agent:
   # MySqlIT 다수가 @ActiveProfiles("local")을 데이터소스 설정 모양만 빌려 쓰는데, 기본 활성화하면
   # 그 테스트들의 @SpringBootTest 컨텍스트에도 이 scheduler가 함께 떠 실제로 AutoBid를 등록해버릴
   # 수 있다. 실제로 켜려면 PURCHASE_AGENT_SCAN_ENABLED=true가 필요하다.
+  # 에이전트가 한 경매에 쓸 최고 금액 = min(예산, 서버 시세 × cap-ratio). 시세는 중고 호가 중앙값이라
+  # 1.0이면 참여할 매물이 거의 없어 2.0으로 둔다. 참여 알림에 "다음 입찰가가 시세의 몇 배인지"를 함께 보낸다.
+  cap-ratio: ${PURCHASE_AGENT_CAP_RATIO:2.0}
   scan:
     cron: ${PURCHASE_AGENT_SCAN_CRON:0 */5 * * * *}
     enabled: ${PURCHASE_AGENT_SCAN_ENABLED:false}
