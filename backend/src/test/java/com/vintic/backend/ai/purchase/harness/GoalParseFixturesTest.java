@@ -4,6 +4,7 @@ import com.vintic.backend.ai.purchase.dto.GoalCondition;
 import com.vintic.backend.ai.purchase.model.ModelAliases;
 import org.junit.jupiter.api.Test;
 
+import java.time.LocalDate;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -18,6 +19,7 @@ class GoalParseFixturesTest {
         GoalParseHarnessFixtures.Document document = GoalParseHarnessFixtures.load();
 
         assertThat(document.cases()).hasSizeGreaterThanOrEqualTo(40);
+        assertThat(LocalDate.parse(document.today())).isNotNull();
         assertThat(document.cases()).allSatisfy(harnessCase -> {
             assertThat(harnessCase.id()).isNotBlank();
             assertThat(harnessCase.text()).isNotBlank();
@@ -43,6 +45,13 @@ class GoalParseFixturesTest {
                 assertThat(modelAliases.isKnownKey(modelKey))
                         .as("%s: 카탈로그에 없는 modelKey %s", harnessCase.id(), modelKey).isTrue();
             }
+            String deadline = harnessCase.expected().deadline();
+            if (deadline != null) {
+                // 기준일 이전 기한은 파서가 비워야 하는 값이라 정답으로 둘 수 없다.
+                assertThat(LocalDate.parse(deadline))
+                        .as("%s: 기준일 이전 기한 %s", harnessCase.id(), deadline)
+                        .isAfterOrEqualTo(LocalDate.parse(document.today()));
+            }
             String condition = harnessCase.expected().minCondition();
             if (condition != null) {
                 assertThat(GoalCondition.fromLabel(condition))
@@ -62,5 +71,6 @@ class GoalParseFixturesTest {
             assertThat(c.expected().brand()).isNotNull();
         });
         assertThat(cases).anySatisfy(c -> assertThat(c.expected().hardMaxAmount()).isNull());
+        assertThat(cases).anySatisfy(c -> assertThat(c.expected().deadline()).isNotNull());
     }
 }

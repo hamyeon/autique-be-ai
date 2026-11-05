@@ -7,6 +7,8 @@ import com.vintic.backend.ai.purchase.model.ModelAliases;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
+import java.time.Clock;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -68,11 +70,14 @@ public class RuleBasedGoalParser implements GoalParser {
     private static final Pattern NOISE = Pattern.compile("[,./~!?()\\[\\]{}\"'`:;·]+|\\s+");
 
     private final ModelAliases modelAliases;
+    // "3일 안에", "이번 주까지" 같은 상대 기한의 기준일. 테스트·하네스는 Clock.fixed로 고정한다.
+    private final Clock clock;
 
     @Override
     public GoalDraft parse(String naturalLanguage) {
         if (naturalLanguage == null || naturalLanguage.isBlank()) {
-            return GoalDraft.empty(List.of(GoalDraftWarnings.MODEL_UNKNOWN, GoalDraftWarnings.BUDGET_MISSING));
+            return GoalDraft.empty(List.of(
+                    GoalDraftWarnings.MODEL_UNKNOWN, GoalDraftWarnings.BUDGET_MISSING, GoalDraftWarnings.DEADLINE_MISSING));
         }
         String text = naturalLanguage.trim();
         String lower = text.toLowerCase(Locale.ROOT);
@@ -86,6 +91,11 @@ public class RuleBasedGoalParser implements GoalParser {
         Amount amount = extractMaxAmount(lower, consumed);
         Integer sizeKr = extractSize(lower, consumed);
         GoalCondition condition = extractCondition(lower, consumed);
+        LocalDate today = GoalDeadlines.today(clock);
+        DeadlineExtractor.Result deadlineDate = DeadlineExtractor.extract(lower, today, consumed);
+        GoalDeadlines.Resolved deadline = deadlineDate.invalid()
+                ? GoalDeadlines.Resolved.OUT_OF_RANGE
+                : GoalDeadlines.resolve(deadlineDate.date(), today);
 
         String freeText = leftover(text, consumed);
 
@@ -94,12 +104,13 @@ public class RuleBasedGoalParser implements GoalParser {
         String modelQuery = model.map(m -> m.model().fullName()).orElse(null);
 
         List<String> warnings = GoalDraftWarnings.forDraft(
-                modelKey, brandName, amount.value(), sizeKr, freeText, amount.minIgnored(), amount.outOfRange());
+                modelKey, brandName, amount.value(), sizeKr, deadline.deadline(), freeText,
+                amount.minIgnored(), amount.outOfRange(), deadline.outOfRange());
         if (condition == null) {
             warnings.add(GoalDraftWarnings.CONDITION_MISSING);
         }
 
-        return new GoalDraft(modelQuery, brandName, modelKey, condition, amount.value(), sizeKr, freeText,
+        return new GoalDraft(modelQuery, brandName, modelKey, condition, amount.value(), sizeKr, deadline.deadline(), freeText,
                 confidence(modelKey, brandName, amount.value(), condition, sizeKr, freeText), warnings);
     }
 

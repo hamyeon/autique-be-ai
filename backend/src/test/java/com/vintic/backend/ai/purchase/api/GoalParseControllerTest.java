@@ -10,6 +10,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.anyString;
@@ -33,7 +34,8 @@ class GoalParseControllerTest {
     @Test
     void 자연어를_받아_GoalDraft_초안을_돌려준다() throws Exception {
         when(goalParser.parse(anyString())).thenReturn(new GoalDraft(
-                "New Balance 990", "New Balance", "nb990", GoalCondition.A, 150_000L, null, null, 0.9,
+                "New Balance 990", "New Balance", "nb990", GoalCondition.A, 150_000L, null,
+                OffsetDateTime.parse("2026-11-12T23:59:00+09:00"), null, 0.9,
                 List.of("사이즈가 없습니다. 사이즈를 지정하지 않으면 모든 사이즈가 후보가 됩니다.")));
 
         mockMvc.perform(post("/api/purchase-goals/parse")
@@ -47,6 +49,8 @@ class GoalParseControllerTest {
                 .andExpect(jsonPath("$.data.minCondition").value("A"))
                 .andExpect(jsonPath("$.data.hardMaxAmount").value(150000))
                 .andExpect(jsonPath("$.data.sizeKr").doesNotExist())
+                // 등록 요청(CreatePurchaseGoalRequest.deadline)에 그대로 넣을 수 있는 ISO-8601 오프셋 형식이어야 한다.
+                .andExpect(jsonPath("$.data.deadline").value("2026-11-12T23:59:00+09:00"))
                 .andExpect(jsonPath("$.data.freeTextConditions").doesNotExist())
                 .andExpect(jsonPath("$.data.confidence").value(0.9))
                 .andExpect(jsonPath("$.data.warnings[0]").isString())

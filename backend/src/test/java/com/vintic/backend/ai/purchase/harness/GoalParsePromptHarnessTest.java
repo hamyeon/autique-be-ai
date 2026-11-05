@@ -49,7 +49,7 @@ class GoalParsePromptHarnessTest {
         String model = System.getProperty(MODEL_PROPERTY, "gpt-4o-mini");
         GoalParseHarnessFixtures.Document fixtures = GoalParseHarnessFixtures.load();
         TokenCountingChatClient chatClient = new TokenCountingChatClient(createRealClient());
-        OpenAiGoalParser parser = createParser(model, chatClient);
+        OpenAiGoalParser parser = createParser(model, chatClient, fixtures);
 
         List<GoalParseHarnessScorer.CaseScore> scores = new ArrayList<>();
         int caseCount = fixtures.cases().size();
@@ -84,13 +84,15 @@ class GoalParsePromptHarnessTest {
         return client;
     }
 
-    private OpenAiGoalParser createParser(String model, ChatCompletionClient chatClient) {
+    private OpenAiGoalParser createParser(String model, ChatCompletionClient chatClient,
+                                          GoalParseHarnessFixtures.Document fixtures) {
         GoalParserProperties properties = new GoalParserProperties();
         properties.setModel(model);
         ModelAliases modelAliases = new ModelAliases();
         return new OpenAiGoalParser(
                 chatClient, new ObjectMapper(), new GoalDraftValidator(modelAliases),
-                Mockito.mock(AiCallLogger.class), properties, new PromptTemplateLoader(), modelAliases);
+                Mockito.mock(AiCallLogger.class), properties, new PromptTemplateLoader(), modelAliases,
+                fixtures.clock());
     }
 
     // 실제 호출은 그대로 하면서 호출 횟수와 토큰만 누적한다. 정확도만 보고 모델을 고르면 비용을 모른 채 결정하게 된다.

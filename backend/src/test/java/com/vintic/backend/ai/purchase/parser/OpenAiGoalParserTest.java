@@ -15,7 +15,12 @@ import com.vintic.backend.ai.vision.client.VisionChatResponse;
 import com.vintic.backend.common.exception.AiApiException;
 import com.vintic.backend.common.exception.AiResponseFormatException;
 import org.junit.jupiter.api.Test;
+import com.vintic.backend.config.ClockConfig;
 import org.mockito.ArgumentCaptor;
+
+import java.time.Clock;
+import java.time.Instant;
+import java.time.OffsetDateTime;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -36,20 +41,23 @@ class OpenAiGoalParserTest {
     void 시스템_프롬프트에_카탈로그가_실리고_응답은_검증기를_거쳐_GoalDraft가_된다() {
         RecordingClient client = new RecordingClient(
                 "{\"modelKey\":\"nb990\",\"modelQuery\":\"NB 990\",\"brand\":\"뉴발\",\"minCondition\":\"A\","
-                        + "\"hardMaxAmount\":150000,\"sizeKr\":270,\"freeTextConditions\":null,\"confidence\":0.9}");
+                        + "\"hardMaxAmount\":150000,\"sizeKr\":270,\"deadlineDate\":\"2026-11-08\","
+                        + "\"freeTextConditions\":null,\"confidence\":0.9}");
 
-        GoalDraft draft = parser(client).parse("뉴발 990 A급 270 15만원 이하");
+        GoalDraft draft = parser(client).parse("뉴발 990 A급 270 15만원 이하 이번 주까지");
 
         VisionChatRequest sent = client.requests.get(0);
         assertThat(sent.systemPrompt()).contains("nb990 | New Balance 990 |").doesNotContain("{{MODEL_CATALOG}}");
-        assertThat(sent.userText()).isEqualTo("뉴발 990 A급 270 15만원 이하");
+        // 상대 기한을 계산할 수 있게 오늘 날짜(서울)와 요일이 user 메시지 앞줄에 실린다.
+        assertThat(sent.userText()).isEqualTo("오늘: 2026-11-05 (목)\n구매 목표: 뉴발 990 A급 270 15만원 이하 이번 주까지");
         assertThat(sent.imageUrls()).isEmpty();
-        assertThat(sent.responseSchema().name()).isEqualTo("purchase_goal_parse_v1");
+        assertThat(sent.responseSchema().name()).isEqualTo("purchase_goal_parse_v2");
         // 검증기가 카탈로그 값으로 덮어쓴다 - LLM이 쓴 "NB 990"/"뉴발"이 아니다.
         assertThat(draft.modelQuery()).isEqualTo("New Balance 990");
         assertThat(draft.brand()).isEqualTo("New Balance");
         assertThat(draft.minCondition()).isEqualTo(GoalCondition.A);
         assertThat(draft.hardMaxAmount()).isEqualTo(150_000L);
+        assertThat(draft.deadline()).isEqualTo(OffsetDateTime.parse("2026-11-08T23:59:00+09:00"));
 
         AiCallLog log = recordedLog();
         assertThat(log.getCallType()).isEqualTo(AiCallType.CHAT);
@@ -84,7 +92,8 @@ class OpenAiGoalParserTest {
 
     private OpenAiGoalParser parser(ChatCompletionClient client) {
         return new OpenAiGoalParser(client, new ObjectMapper(), new GoalDraftValidator(modelAliases),
-                aiCallLogger, new GoalParserProperties(), new PromptTemplateLoader(), modelAliases);
+                aiCallLogger, new GoalParserProperties(), new PromptTemplateLoader(), modelAliases,
+                Clock.fixed(Instant.parse("2026-11-05T03:00:00Z"), ClockConfig.APP_ZONE));
     }
 
     private AiCallLog recordedLog() {

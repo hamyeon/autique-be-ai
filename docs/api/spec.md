@@ -1605,7 +1605,7 @@ Authorization: Bearer {accessToken}
 
 Purchase Agent(#95)의 첫 단계입니다. 사용자가 자유롭게 쓴 구매 목표 문장을 구조화된 **초안(GoalDraft)** 으로 바꿔 돌려줍니다.
 
-- **DB에 아무것도 저장하지 않습니다.** 응답은 초안이고, 사용자가 확인 화면에서 고친 값을 `POST /api/purchase-goals`(아래 "# 구매 목표(Purchase Agent) API" 절)로 보내야 Goal이 등록됩니다. 초안에는 `deadline`이 없으므로 확인 화면에서 사용자가 직접 입력합니다.
+- **DB에 아무것도 저장하지 않습니다.** 응답은 초안이고, 사용자가 확인 화면에서 고친 값을 `POST /api/purchase-goals`(아래 "# 구매 목표(Purchase Agent) API" 절)로 보내야 Goal이 등록됩니다. 기한은 문장에 있을 때만 `deadline`에 채워지고("일주일 안에", "11/20까지"), 없으면 `null`이라 확인 화면에서 사용자에게 다시 물어야 합니다.
 - AI 해석에 실패하면 500이 아니라 **규칙 기반 초안**을 `warnings` 첫 줄에 안내를 붙여 돌려줍니다. 그래도 실패하면(50003) 프론트는 빈 폼으로 전환해 사용자가 직접 입력하게 해 주세요. 파싱 실패가 등록을 막으면 안 됩니다.
 - 인증이 필요합니다(dev/prod `Authorization: Bearer`, local mock `X-User-Id`). 유료 LLM 호출이라 익명에 열지 않습니다.
 
@@ -1646,10 +1646,12 @@ X-User-Id: {userId}
     "minCondition": "A",
     "hardMaxAmount": 150000,
     "sizeKr": null,
+    "deadline": null,
     "freeTextConditions": null,
     "confidence": 0.9,
     "warnings": [
-      "사이즈가 없습니다. 사이즈를 지정하지 않으면 모든 사이즈가 후보가 됩니다."
+      "사이즈가 없습니다. 사이즈를 지정하지 않으면 모든 사이즈가 후보가 됩니다.",
+      "기한이 없습니다. 언제까지 찾을지 정해 주세요."
     ]
   },
   "error": null
@@ -1668,6 +1670,7 @@ X-User-Id: {userId}
 | `minCondition` | `"DS" \| "S" \| "A" \| "B" \| "C" \| null` | 최소 상태 등급. "A급 이상" → `A`. 없으면 `null`(모든 등급) |
 | `hardMaxAmount` | `number \| null` | 예산 상한(원). "이하/까지/안쪽/정도/선"만 상한으로 봅니다. "이상"만 있으면 `null` |
 | `sizeKr` | `number \| null` | 사이즈(mm, 220~320). 없으면 `null` |
+| `deadline` | `string \| null` (ISO-8601 오프셋) | 언제까지 찾을지. 요청 시점의 오늘(서울) 기준으로 해석한 날짜의 **23:59+09:00**(예: 11/5에 "일주일 안에" → `"2026-11-12T23:59:00+09:00"`). 등록 요청의 `deadline`에 그대로 넣을 수 있는 형식입니다. 기한이 없거나 "빨리"처럼 막연하면 `null`, 지난 날짜·1년 넘게 뒤·날짜로 성립하지 않는 값도 `null` + 경고. 서버가 기본값(예: 7일)을 임의로 채우지 않습니다 |
 | `freeTextConditions` | `string \| null` | 위 필드에 담기지 않은 희망 사항 원문("박스 있으면 좋음", "시카고 컬러"). **v1에서는 필수 조건이 아니라 참고 사항**으로만 쓰입니다 |
 | `confidence` | `number` | 0~1. 초안 전체가 의도와 맞을 확신도. **0.7 미만이면 확인 화면에서 수정 유도를 강조**해 주세요(설계안 6-1). 서버 로직에는 쓰이지 않습니다 |
 | `warnings` | `string[]` | 확인 화면에 그대로 보여줄 안내문. 비어 있을 수 있습니다 |
@@ -1676,6 +1679,8 @@ X-User-Id: {userId}
 
 - `warnings`는 문구를 그대로 노출해도 되는 형태로 내려갑니다. 첫 줄이 "AI 해석에 실패해..."로 시작하면 규칙 기반 초안이므로 수정 유도를 강조해 주세요.
 - `freeTextConditions`에 "필수/꼭/무조건" 같은 표현이 있으면 "v1에서는 참고 사항"이라는 안내가 `warnings`에 함께 옵니다. 등록 전에 사용자가 이 점을 보게 해 주세요.
+- `deadline`이 `null`이면 확인 화면에서 기한을 다시 물어 주세요(등록 API는 `deadline` 필수). 값이 있어도 사용자가 확인·수정할 수 있어야 합니다.
+- 해석하는 기한 표현: 오늘/내일/모레, N일·N주·N개월 안에, 일주일·보름·한 달 안에, 이번 주(말)·다음 주까지(일요일 기준), 이번 달·다음 달까지(말일), M월 D일·M/D까지(지났으면 내년), M월(말)까지, 연말까지. "한 달 신은"처럼 신발 사용 기간은 기한으로 보지 않습니다.
 - 파싱을 거치지 않고 빈 폼에 직접 입력하는 경로도 항상 열어 두세요.
 
 ### Failure ❌
@@ -1751,10 +1756,10 @@ X-User-Id: {userId}
 | `freeTextConditions` | `string` | X | O | 참고 사항(필수 조건으로 쓰이지 않음 — 매물 판정의 참고 문맥) |
 | `deadline` | `string` (ISO-8601 오프셋) | **O** | X | 목표 마감 시각. **현재 이후**여야 함(아니면 `400`/`40005`) |
 
-**parse 초안과의 관계.** `GoalDraft`의 `brand`/`modelKey`/`modelQuery`/`minCondition`/`hardMaxAmount`/`sizeKr`/`freeTextConditions`는
-같은 이름으로 그대로 옮길 수 있습니다. `confidence`·`warnings`는 등록 요청에 없습니다. 초안에 **`deadline` 필드는 없습니다** —
-"다음주 중으로" 같은 기한 표현은 해석하지 않으므로, 확인 화면에서 사용자가 날짜·시각을 **직접 입력·확인**해야 합니다.
-초안에서 `null`인 필수 값(`modelQuery`·`minCondition`·`hardMaxAmount`)도 사용자가 채워야 하며, 서버는 빠진 값을 임의로
+**parse 초안과의 관계.** `GoalDraft`의 `brand`/`modelKey`/`modelQuery`/`minCondition`/`hardMaxAmount`/`sizeKr`/`deadline`/`freeTextConditions`는
+같은 이름으로 그대로 옮길 수 있습니다. `confidence`·`warnings`는 등록 요청에 없습니다. 초안의 `deadline`은 문장에 기한이 있을 때만
+채워지고("다음 주까지" → 다음 주 일요일 23:59+09:00), 없으면 `null`이므로 확인 화면에서 사용자에게 **다시 물어** 채워야 합니다.
+초안에서 `null`인 필수 값(`modelQuery`·`minCondition`·`hardMaxAmount`·`deadline`)도 사용자가 채워야 하며, 서버는 빠진 값을 임의로
 채워 등록하지 않습니다(빠지면 `400`).
 
 ```json
@@ -1891,7 +1896,7 @@ X-User-Id: {userId}
 ### 1. 조건 입력 → 등록
 
 1. `POST /api/purchase-goals/parse` → 초안. `warnings`를 그대로 보여 주고, 첫 줄이 "AI 해석에 실패해..."면 규칙 기반 초안이니 수정 유도. `confidence < 0.7`이면 수정 유도 강조. parse가 실패(`50003`)하면 빈 폼으로 직접 입력.
-2. 확인 화면에서 `null`인 필수 값과 **`deadline`을 사용자가 직접 입력**.
+2. 확인 화면에서 `null`인 필수 값을 사용자가 입력. 초안 `deadline`이 `null`(문장에 기한 없음)이면 기한을 다시 물어 채운다.
 3. `POST /api/purchase-goals` → `201`, `status: ACTIVE`.
 
 ### 2. 진행 상태·참여 경매

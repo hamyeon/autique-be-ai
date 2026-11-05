@@ -7,6 +7,8 @@ import com.vintic.backend.ai.purchase.model.ModelAliases;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
+import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Optional;
 
@@ -31,7 +33,8 @@ public class GoalDraftValidator {
 
     private final ModelAliases modelAliases;
 
-    GoalDraft validate(LlmGoalDraft llm) {
+    // today: LLM에게 알려준 기준일. 같은 값으로 검증해야 자정 경계에서 어긋나지 않는다.
+    GoalDraft validate(LlmGoalDraft llm, LocalDate today) {
         Optional<ModelAliases.ModelInfo> catalogModel = modelAliases.byKey(llm.modelKey());
         boolean unknownKey = llm.modelKey() != null && catalogModel.isEmpty();
 
@@ -53,9 +56,12 @@ public class GoalDraftValidator {
             sizeKr = null;
         }
 
+        GoalDeadlines.Resolved deadline = resolveDeadline(llm.deadlineDate(), today);
+
         String freeText = blankToNull(llm.freeTextConditions());
 
-        List<String> warnings = GoalDraftWarnings.forDraft(modelKey, brand, amount, sizeKr, freeText, false, amountOutOfRange);
+        List<String> warnings = GoalDraftWarnings.forDraft(modelKey, brand, amount, sizeKr, deadline.deadline(), freeText,
+                false, amountOutOfRange, deadline.outOfRange());
         if (modelKey == null && (unknownKey || modelQuery != null)) {
             // 모델 이름은 알아봤는데 시세 카탈로그에 없다 - "못 알아봄"과는 다른 안내가 필요하다.
             warnings.removeIf(w -> w.equals(GoalDraftWarnings.MODEL_UNKNOWN) || w.equals(GoalDraftWarnings.BRAND_ONLY));
@@ -69,7 +75,21 @@ public class GoalDraftValidator {
         if (modelKey == null) {
             confidence = Math.min(confidence, UNKNOWN_MODEL_CONFIDENCE_CAP);
         }
-        return new GoalDraft(modelQuery, brand, modelKey, condition, amount, sizeKr, freeText, confidence, warnings);
+        return new GoalDraft(modelQuery, brand, modelKey, condition, amount, sizeKr, deadline.deadline(), freeText,
+                confidence, warnings);
+    }
+
+    // "YYYY-MM-DD"가 아니거나, 지난 날짜·1년 넘게 뒤면 비운다(연도 착각이 흔한 실수다).
+    private GoalDeadlines.Resolved resolveDeadline(String deadlineDate, LocalDate today) {
+        String value = blankToNull(deadlineDate);
+        if (value == null) {
+            return GoalDeadlines.Resolved.NONE;
+        }
+        try {
+            return GoalDeadlines.resolve(LocalDate.parse(value), today);
+        } catch (DateTimeParseException e) {
+            return GoalDeadlines.Resolved.OUT_OF_RANGE;
+        }
     }
 
     private String blankToNull(String value) {

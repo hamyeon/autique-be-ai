@@ -1,5 +1,6 @@
 package com.vintic.backend.ai.purchase.dto;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 
 // 자연어 구매 목표를 구조화한 초안. 설계안 6-1의 응답이다.
@@ -14,6 +15,9 @@ import java.util.List;
 //   - sizeKr: 신발은 사이즈 없이 살 수 없는데 계약에 사이즈 칸이 없었다. 자유 조건에 섞어
 //     soft로 두면 다른 사이즈를 사게 되므로 구조화 필드로 뺐다. 백엔드 pre-filter
 //     (PurchaseGoalCandidateFinder)가 hard 필터로 쓴다.
+//   - deadline: 언제까지 찾을지. 등록 API(CreatePurchaseGoalRequest.deadline)가 필수로 받는 값이라 같은 이름·타입으로
+//     둔다. 문장에 기한이 없으면 null이고 확인 화면이 사용자에게 다시 묻는다 - 서버가 기본값을 지어내지 않는다.
+//     "11/20까지"처럼 날짜만 나오므로 시각은 그날 23:59(Asia/Seoul)로 채운다.
 //   - warnings: 확인 화면에 띄울 안내. "사이즈 없음", "'박스 필수'는 v1에서 참고 사항" 등.
 public record GoalDraft(
         String modelQuery,
@@ -22,6 +26,7 @@ public record GoalDraft(
         GoalCondition minCondition,
         Long hardMaxAmount,
         Integer sizeKr,
+        OffsetDateTime deadline,
         String freeTextConditions,
         double confidence,
         List<String> warnings
@@ -33,6 +38,6 @@ public record GoalDraft(
     }
 
     public static GoalDraft empty(List<String> warnings) {
-        return new GoalDraft(null, null, null, null, null, null, null, 0.0, warnings);
+        return new GoalDraft(null, null, null, null, null, null, null, null, 0.0, warnings);
     }
 }
