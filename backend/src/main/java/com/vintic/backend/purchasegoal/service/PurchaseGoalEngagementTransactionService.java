@@ -50,12 +50,16 @@ public class PurchaseGoalEngagementTransactionService {
 
     @Transactional
     public PurchaseGoalEngagementResult engage(Long goalId, Long auctionId, Long userId, long cap) {
-        return engage(goalId, auctionId, userId, cap, null);
+        return engage(goalId, auctionId, userId, cap, null, null);
     }
 
     // priceNote: 참여 알림에 덧붙일 시세 비교 문장(PriceRatio.engagementNote). null이면 기본 문구만 보낸다.
+    // estimatedPriceAtEngage: cap 계산에 실제로 쓴 서버 시세. AutoBidSetting 행에 함께 저장되므로
+    // 아래 createAutoBid()가 실패해 이 트랜잭션이 롤백되면 스냅샷도 남지 않는다.
     @Transactional
-    public PurchaseGoalEngagementResult engage(Long goalId, Long auctionId, Long userId, long cap, String priceNote) {
+    public PurchaseGoalEngagementResult engage(
+            Long goalId, Long auctionId, Long userId, long cap, String priceNote, Long estimatedPriceAtEngage
+    ) {
         LocalDateTime now = LocalDateTime.now(clock);
         int updated = purchaseGoalRepository.transitionToEngaged(goalId, auctionId, now);
         if (updated != 1) {
@@ -67,7 +71,8 @@ public class PurchaseGoalEngagementTransactionService {
         // 자연히 만들어지지 않는다. 등록이 성공했을 때만, 같은 트랜잭션에서 함께 커밋한다 -
         // Day 6 관찰이 나중에 같은 (goal, auction)을 다시 봐도 transitionToEngaged가 이미
         // affected=1이었던 이 시도 자체가 재실행되지 않으므로 중복 알림 경로가 없다.
-        AutoBidRegisterResponse response = autoBidCommandService.createAutoBid(auctionId, userId, cap, null, goalId);
+        AutoBidRegisterResponse response = autoBidCommandService.createAutoBid(
+                auctionId, userId, cap, null, goalId, estimatedPriceAtEngage);
         User user = userRepository.getReferenceById(userId);
         notificationRecorder.recordPurchaseAgentEngaged(user, goalId, auctionId, priceNote);
 

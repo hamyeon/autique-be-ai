@@ -16,6 +16,8 @@ import com.vintic.backend.purchasegoal.domain.PurchaseGoalStatus;
 import com.vintic.backend.purchasegoal.dto.PurchaseGoalCancelResponse;
 import com.vintic.backend.purchasegoal.repository.PurchaseGoalRepository;
 import com.vintic.backend.purchasegoal.service.PurchaseGoalCommandService;
+import com.vintic.backend.purchasegoal.dto.PurchaseGoalParticipationResponse;
+import com.vintic.backend.purchasegoal.service.PurchaseGoalQueryService;
 import com.vintic.backend.purchasegoal.service.PurchaseGoalEngagementResult;
 import com.vintic.backend.purchasegoal.service.PurchaseGoalEngagementTransactionService;
 import com.vintic.backend.user.domain.User;
@@ -41,6 +43,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 
 // Day 5: Goal ACTIVE->ENGAGED 조건부 전이 + AutoBid 생성의 원자성/동시성만 실제 MySQL로 검증한다.
 // @DataJpaTest(테스트 전체가 하나의 롤백 트랜잭션)를 쓰지 않는다 - PurchaseGoalEngagementTransactionService.
@@ -72,6 +75,9 @@ class PurchaseGoalEngagementMySqlIT {
 
     @Autowired
     private PurchaseGoalCommandService purchaseGoalCommandService;
+
+    @Autowired
+    private PurchaseGoalQueryService purchaseGoalQueryService;
 
     @Autowired
     private AutoBidCommandService autoBidCommandService;
@@ -329,5 +335,48 @@ class PurchaseGoalEngagementMySqlIT {
         } finally {
             executor.shutdown();
         }
+    }
+
+    @Test
+    void 참여에_성공하면_상한_계산에_쓴_시세와_실제_상한이_커밋되고_상세조회에_그대로_나온다() {
+        User seller = persistUser("seller-snap1@vintic.local");
+        User buyer = persistUser("buyer-snap1@vintic.local");
+        Auction auction = persistLiveAuction(persistProduct(seller), 100000L, 5000L); // minNextBidAmount=105000
+        PurchaseGoal goal = persistActiveGoal(buyer, 500000L);
+
+        // 시세 110,000 x 2.0 = 220,000 < 예산 500,000 -> cap 220,000
+        PurchaseGoalEngagementResult result = engagementTransactionService.engage(
+                goal.getId(), auction.getId(), buyer.getId(), 220000L, null, 110000L);
+
+        assertThat(result.engaged()).isTrue();
+        AutoBidSetting setting = autoBidSettingRepository.findById(result.autoBidSettingId()).orElseThrow();
+        assertThat(setting.getEstimatedPriceAtEngage()).isEqualTo(110000L);
+        assertThat(setting.getMaxAmount()).isEqualTo(220000L);
+
+        assertThat(purchaseGoalQueryService.getGoal(goal.getId(), buyer.getId()).participations())
+                .extracting(PurchaseGoalParticipationResponse::auctionId,
+                        PurchaseGoalParticipationResponse::estimatedPriceAtEngage,
+                        PurchaseGoalParticipationResponse::autoBidCap)
+                .containsExactly(tuple(auction.getId(), 110000L, 220000L));
+    }
+
+    @Test
+    void 참여_트랜잭션이_롤백되면_시세_스냅샷도_남지_않는다() {
+        User seller = persistUser("seller-snap2@vintic.local");
+        User buyer = persistUser("buyer-snap2@vintic.local");
+        // currentPrice=99000, bidIncrement=5000 -> minNextBidAmount=104000 > cap 100000 -> CapTooLow
+        Auction auction = persistLiveAuction(persistProduct(seller), 99000L, 5000L);
+        PurchaseGoal goal = persistActiveGoal(buyer, 500000L);
+
+        assertThatThrownBy(() -> engagementTransactionService.engage(
+                goal.getId(), auction.getId(), buyer.getId(), 100000L, null, 50000L))
+                .isInstanceOf(CapTooLowException.class);
+
+        assertThat(purchaseGoalRepository.findById(goal.getId()).orElseThrow().getStatus()).isEqualTo(PurchaseGoalStatus.ACTIVE);
+        // 스냅샷은 AutoBid 행의 컬럼이라, 이 Goal에 연결된 행이 하나도 없으면 스냅샷도 없다.
+        assertThat(autoBidSettingRepository.findAll().stream()
+                .filter(setting -> goal.getId().equals(setting.getPurchaseGoalId())))
+                .isEmpty();
+        assertThat(purchaseGoalQueryService.getGoal(goal.getId(), buyer.getId()).participations()).isEmpty();
     }
 }

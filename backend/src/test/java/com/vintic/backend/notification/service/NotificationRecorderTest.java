@@ -3,6 +3,7 @@ package com.vintic.backend.notification.service;
 import com.vintic.backend.notification.domain.Notification;
 import com.vintic.backend.notification.domain.NotificationType;
 import com.vintic.backend.notification.repository.NotificationRepository;
+import com.vintic.backend.purchasegoal.domain.PurchaseGoalStatus;
 import com.vintic.backend.support.TestClockConfig;
 import com.vintic.backend.user.domain.User;
 import jakarta.persistence.EntityManager;
@@ -11,6 +12,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataIntegrityViolationException;
+
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -74,5 +77,27 @@ class NotificationRecorderTest {
 
         assertThat(won.getTitle()).isNotEqualTo(backupOffer.getTitle());
         assertThat(backupOffer.getTitle()).isNotEqualTo(paymentExpired.getTitle());
+    }
+
+    @Test
+    void AUCTION_WON_고정_문구는_그대로다() {
+        User recipient = persistUser("recipient4@vintic.local");
+
+        Notification won = notificationRecorder.record(recipient, NotificationType.AUCTION_WON, 1L, 1L);
+
+        assertThat(won.getTitle()).isEqualTo("낙찰되었습니다");
+        assertThat(won.getBody()).isEqualTo("낙찰되었습니다. 결제를 진행해주세요.");
+    }
+
+    @Test
+    void 패배_결과가_될_수_없는_Goal_상태로_LOST_알림을_만들면_거절한다() {
+        User recipient = persistUser("recipient5@vintic.local");
+
+        for (PurchaseGoalStatus invalid : List.of(
+                PurchaseGoalStatus.ENGAGED, PurchaseGoalStatus.CANCEL_REQUESTED, PurchaseGoalStatus.FULFILLED)) {
+            assertThatThrownBy(() -> notificationRecorder.recordPurchaseAgentLost(recipient, 1L, 2L, invalid))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+        assertThat(notificationRepository.findAll()).isEmpty();
     }
 }

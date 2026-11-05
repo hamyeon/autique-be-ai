@@ -25,9 +25,12 @@ public record PurchaseGoalResponse(
         Long currentAuctionId,
         OffsetDateTime createdAt,
         int participationCount,
-        int wonCount
+        int wonCount,
+        // 현재 적용 중인 상한 배수 설정(purchase-agent.cap-ratio, PurchaseGoalCapPolicy와 같은 값).
+        // 앞으로의 참여에 쓰일 값이다 - 과거 참여의 실제 상한은 상세의 participations[].autoBidCap으로 본다.
+        double capRatio
 ) {
-    public static PurchaseGoalResponse from(PurchaseGoal goal, int participationCount, int wonCount) {
+    public static PurchaseGoalResponse from(PurchaseGoal goal, int participationCount, int wonCount, double capRatio) {
         return new PurchaseGoalResponse(
                 goal.getId(),
                 goal.getUser().getId(),
@@ -43,7 +46,8 @@ public record PurchaseGoalResponse(
                 goal.getCurrentAuctionId(),
                 TimePolicy.toApiTime(goal.getCreatedAt()),
                 participationCount,
-                wonCount
+                wonCount,
+                capRatio
         );
     }
 }

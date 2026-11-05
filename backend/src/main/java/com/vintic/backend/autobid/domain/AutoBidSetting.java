@@ -71,6 +71,13 @@ public class AutoBidSetting {
     @Column(name = "purchase_goal_id")
     private Long purchaseGoalId;
 
+    // Purchase Agent 참여 스냅샷: 참여 직전에 다시 계산해 이 AutoBid의 maxAmount(cap)를 정하는 데 실제로
+    // 쓴 서버 시세다. 생성 시점(reserve 5-arg)에만 채우고 바꾸는 메서드가 없다 - 이후 시세나
+    // purchase-agent.cap-ratio 설정이 바뀌어도 과거 참여 값은 그대로 남아야 한다. 일반 AutoBid와 이 컬럼
+    // 도입 전에 만든 Agent AutoBid는 null이다(당시 시세를 복원할 수 없어 보정하지 않는다).
+    @Column(name = "estimated_price_at_engage", updatable = false)
+    private Long estimatedPriceAtEngage;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
@@ -108,6 +115,19 @@ public class AutoBidSetting {
     public static AutoBidSetting reserve(Auction auction, User user, Long maxAmount, Long purchaseGoalId) {
         AutoBidSetting setting = reserve(auction, user, maxAmount);
         setting.purchaseGoalId = purchaseGoalId;
+        return setting;
+    }
+
+    // Purchase Agent 참여(PurchaseGoalEngagementTransactionService) 전용 - 참여 시점 시세 스냅샷을
+    // AutoBid 행과 같은 INSERT로 저장한다. 그래서 참여 트랜잭션이 롤백되면 스냅샷도 함께 사라진다.
+    public static AutoBidSetting reserve(
+            Auction auction, User user, Long maxAmount, Long purchaseGoalId, Long estimatedPriceAtEngage
+    ) {
+        if (estimatedPriceAtEngage != null && estimatedPriceAtEngage <= 0) {
+            throw new IllegalArgumentException("참여 시점 시세는 0보다 커야 합니다.");
+        }
+        AutoBidSetting setting = reserve(auction, user, maxAmount, purchaseGoalId);
+        setting.estimatedPriceAtEngage = estimatedPriceAtEngage;
         return setting;
     }
 
@@ -204,6 +224,10 @@ public class AutoBidSetting {
 
     public Long getPurchaseGoalId() {
         return purchaseGoalId;
+    }
+
+    public Long getEstimatedPriceAtEngage() {
+        return estimatedPriceAtEngage;
     }
 
     public LocalDateTime getCreatedAt() {

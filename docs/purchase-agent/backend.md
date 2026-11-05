@@ -118,11 +118,39 @@ goal별 요약(`Purchase Agent 후보 탐색 - goalId=…, 제외 {사유=건수
 
 상한이 정해지면 `PurchaseGoalEngagementTransactionService.engage`가 **하나의 물리 트랜잭션**에서:
 1. 목표를 `ACTIVE → ENGAGED`로 **조건부 전이**(정확히 1행에 반영돼야 함 — 동시 중복 참여 방지),
-2. `autoBidCommandService.createAutoBid(auctionId, userId, cap, …, goalId)`로 **실제 AutoBid 생성**,
+2. `autoBidCommandService.createAutoBid(auctionId, userId, cap, …, goalId, estimatedPriceAtEngage)`로 **실제 AutoBid 생성**
+   (참여 스냅샷도 같은 INSERT로 저장 — 아래),
 3. `PURCHASE_AGENT_ENGAGED` 알림 기록.
 
 AutoBid 생성이 실패하면 **예외를 삼키지 않아** 목표 전이까지 함께 롤백된다 — "목표는 ENGAGED인데 입찰은
 없는" 어긋난 상태를 만들지 않는다.
+
+### 참여 스냅샷 (`estimatedPriceAtEngage` / `autoBidCap`)
+참여 한 건마다 "상한을 어떤 시세로 얼마로 정했는지"를 숫자로 남긴다. 프론트는 `GET /api/purchase-goals/{id}`의
+`participations[]`로 읽는다(알림 문장을 파싱하지 않는다).
+
+| 응답 필드 | 저장 위치 | 값 |
+| --- | --- | --- |
+| `estimatedPriceAtEngage` | `auto_bid_settings.estimated_price_at_engage` (BIGINT NULL, 신규) | §6에서 참여 직전에 다시 계산해 **상한 계산에 실제로 쓴** 서버 시세 |
+| `autoBidCap` | `auto_bid_settings.max_amount` (기존) | 실제로 등록한 자동입찰 상한 = `min(hardMaxAmount, floor(시세 × cap-ratio))` |
+
+- **AutoBidSetting에 둔 이유**: 참여 이력 자체가 `purchase_goal_id`가 연결된 AutoBidSetting 행이다(별도 참여
+  테이블 없음). 실제 상한(`max_amount`)도 이미 이 행에 있어, 시세를 같은 행에 두면 두 값이 항상 같은 참여를
+  가리키고 같은 INSERT로 함께 커밋·롤백된다. `PurchaseGoalMatch`는 Matcher 판정 캐시라 참여하지 않은 경매에도
+  행이 생기고, 참여 트랜잭션 밖(랭킹 단계)에서 저장되므로 맞지 않는다.
+- **바뀌지 않는다**: `estimated_price_at_engage`는 생성 시에만 채우고(`updatable = false`, 변경 메서드 없음),
+  조회 시 현재 시세·cap-ratio로 다시 계산하지 않는다. `max_amount`는 `PATCH .../auto-bids/me`로 바뀔 수 있는
+  컬럼이지만, 에이전트가 관리하는 동안은 `AgentManagedAuctionGuard`가 수정을 막고, 관리가 끝나는 시점(경매
+  `ENDED`/`CANCELED` 후 결과 관찰)에는 경매가 이미 닫혀 수정이 거절된다 — 그래서 에이전트 참여의 `max_amount`는
+  사실상 등록 시점 값으로 고정된다. 경매 상세의 현재 `aiEstimatedPrice`는 참여 당시 시세가 아니므로 대신 쓰지 않는다.
+- **기존 데이터**: 이 컬럼 도입 전 참여는 당시 시세를 복원할 수 없어 `estimatedPriceAtEngage = null`이다(현재
+  시세로 보정하지 않는다). `autoBidCap`은 기존 `max_amount`가 있으므로 그대로 나온다.
+- **마이그레이션**: `backend/scripts/migrations/auto-bid-estimated-price-at-engage.sql`(재실행 안전, 배포 전 적용 —
+  Worker는 `ddl-auto: validate`라 컬럼이 먼저 있어야 기동한다).
+
+**`capRatio` 응답 필드**: 목표 등록·목록·상세 응답의 `capRatio`는 `PurchaseGoalCapPolicy.capRatio()` — **지금
+적용 중인** `purchase-agent.cap-ratio` 설정값이다. 앞으로의 참여에 쓰일 배수일 뿐이며, 과거 참여의 실제 상한은
+`participations[].autoBidCap`으로 본다(설정이 바뀌면 `capRatio`만 바뀌고 과거 `autoBidCap`은 그대로다).
 
 ### 잠금·경쟁 처리와 충돌 방지
 - `createAutoBid`는 경매를 **비관적 락**으로 잠그고 생성되므로, **수동 입찰이나 기존 AutoBid와의 충돌**은
@@ -140,6 +168,21 @@ AutoBid 생성이 실패하면 **예외를 삼키지 않아** 목표 전이까�
 - **낙찰(주문 존재)** → `FULFILLED`.
 - **패배** → `CANCEL_REQUESTED`였으면 `CANCELLED`, 아니면 기한이 남았으면 `ACTIVE`로 되돌려 **재탐색**,
   기한이 지났으면 `EXPIRED`.
+
+### 패배 알림 (`PURCHASE_AGENT_LOST`)
+위 조건부 UPDATE가 실제로 1행을 바꾼 경우에만, 같은 트랜잭션에서 기록한다(중복 관찰·다른 서버의 동시 관찰은
+UPDATE가 0행이라 알림을 만들지 않는다. `businessEventKey = PURCHASE_AGENT_LOST:{goalId}:{auctionId}` UNIQUE가
+최종 방어선). 본문은 **실제로 전이된 상태**로 고른다(`NotificationRecorder.recordPurchaseAgentLost(…, PurchaseGoalStatus)`):
+
+| 전이 결과 | 본문 |
+| --- | --- |
+| `ACTIVE` (패배, 목표 마감 전) | 이번 경매는 낙찰하지 못했습니다. 계속해서 조건에 맞는 경매를 찾고 있습니다. |
+| `EXPIRED` (패배, 목표 마감 경과) | 이번 경매는 낙찰하지 못했습니다. 구매 목표의 마감 시간이 지나 구매 대행을 종료합니다. |
+| `CANCELLED` (취소 요청 상태에서 패배) | 이번 경매는 낙찰하지 못했습니다. 취소 요청에 따라 구매 대행을 종료합니다. |
+
+- 낙찰은 에이전트 전용 알림을 만들지 않는다 — 정산(`AuctionSettlementService`)이 기존 `AUCTION_WON`을 보낸다.
+- **알림 시점**: 경매 도중 자동입찰이 `CAP_REACHED`가 돼도 알림을 보내거나 다른 경매로 옮기지 않는다. 패배 판정과
+  알림은 **경매 종료 후 다음 결과 관찰 스캔**에서 처리된다(스캔 주기는 `purchase-agent.scan.cron` 설정에 따라 다르다).
 
 ### FULFILLED는 "낙찰"이지 "결제 완료"가 아니다
 `FULFILLED`는 **참여한 경매에서 그 사용자가 낙찰자가 됐다(주문이 생겼다)** 는 뜻이다. 결제가 끝났다는

@@ -19,7 +19,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.HashMap;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -46,19 +45,22 @@ public class PurchaseGoalQueryService {
     private final AuctionRepository auctionRepository;
     private final OrderRepository orderRepository;
     private final PurchaseGoalMatchRepository purchaseGoalMatchRepository;
+    private final PurchaseGoalCapPolicy capPolicy;
 
     public PurchaseGoalQueryService(
             PurchaseGoalRepository purchaseGoalRepository,
             AutoBidSettingRepository autoBidSettingRepository,
             AuctionRepository auctionRepository,
             OrderRepository orderRepository,
-            PurchaseGoalMatchRepository purchaseGoalMatchRepository
+            PurchaseGoalMatchRepository purchaseGoalMatchRepository,
+            PurchaseGoalCapPolicy capPolicy
     ) {
         this.purchaseGoalRepository = purchaseGoalRepository;
         this.autoBidSettingRepository = autoBidSettingRepository;
         this.auctionRepository = auctionRepository;
         this.orderRepository = orderRepository;
         this.purchaseGoalMatchRepository = purchaseGoalMatchRepository;
+        this.capPolicy = capPolicy;
     }
 
     // 페이지네이션이 없는 완전한 목록이다 - 전체 참여/낙찰 합계가 필요하면 프론트가 이 목록을
@@ -78,7 +80,7 @@ public class PurchaseGoalQueryService {
                     List<PurchaseGoalParticipationResponse> participations =
                             participationsByGoal.getOrDefault(goal.getId(), List.of());
                     int wonCount = (int) participations.stream().filter(p -> "WON".equals(p.status())).count();
-                    return PurchaseGoalResponse.from(goal, participations.size(), wonCount);
+                    return PurchaseGoalResponse.from(goal, participations.size(), wonCount, capPolicy.capRatio());
                 })
                 .toList();
     }
@@ -94,7 +96,7 @@ public class PurchaseGoalQueryService {
 
         List<PurchaseGoalParticipationResponse> participations =
                 participationsByGoalId(List.of(goalId), userId).getOrDefault(goalId, List.of());
-        return PurchaseGoalDetailResponse.from(goal, participations);
+        return PurchaseGoalDetailResponse.from(goal, participations, capPolicy.capRatio());
     }
 
     // Day 8: GET /api/purchase-goals/{id}/matches 전용. 참여 이력(AutoBidSetting 기반)과 완전히
@@ -126,9 +128,11 @@ public class PurchaseGoalQueryService {
             return Map.of();
         }
 
-        Map<Long, Set<Long>> auctionIdsByGoal = new LinkedHashMap<>();
+        // (goal, auction)당 첫 행(참여 순서상 가장 먼저 등록된 AutoBid)의 값을 쓴다 - 설계상 1건뿐이다.
+        Map<Long, Map<Long, AutoBidSettingRepository.PurchaseGoalAuctionPair>> pairByAuctionByGoal = new LinkedHashMap<>();
         for (AutoBidSettingRepository.PurchaseGoalAuctionPair pair : pairs) {
-            auctionIdsByGoal.computeIfAbsent(pair.getGoalId(), k -> new LinkedHashSet<>()).add(pair.getAuctionId());
+            pairByAuctionByGoal.computeIfAbsent(pair.getGoalId(), k -> new LinkedHashMap<>())
+                    .putIfAbsent(pair.getAuctionId(), pair);
         }
 
         Set<Long> allAuctionIds = pairs.stream()
@@ -148,12 +152,14 @@ public class PurchaseGoalQueryService {
                 : Set.copyOf(orderRepository.findWonAuctionIds(endedAuctionIds, userId));
 
         Map<Long, List<PurchaseGoalParticipationResponse>> result = new LinkedHashMap<>();
-        for (Map.Entry<Long, Set<Long>> entry : auctionIdsByGoal.entrySet()) {
-            List<PurchaseGoalParticipationResponse> participations = entry.getValue().stream()
-                    .map(auctionId -> new PurchaseGoalParticipationResponse(
-                            auctionId,
-                            classify(statusByAuctionId.get(auctionId), wonAuctionIds.contains(auctionId)),
-                            statusByAuctionId.get(auctionId)
+        for (Map.Entry<Long, Map<Long, AutoBidSettingRepository.PurchaseGoalAuctionPair>> entry : pairByAuctionByGoal.entrySet()) {
+            List<PurchaseGoalParticipationResponse> participations = entry.getValue().values().stream()
+                    .map(pair -> new PurchaseGoalParticipationResponse(
+                            pair.getAuctionId(),
+                            classify(statusByAuctionId.get(pair.getAuctionId()), wonAuctionIds.contains(pair.getAuctionId())),
+                            statusByAuctionId.get(pair.getAuctionId()),
+                            pair.getEstimatedPriceAtEngage(),
+                            pair.getMaxAmount()
                     ))
                     .toList();
             result.put(entry.getKey(), participations);

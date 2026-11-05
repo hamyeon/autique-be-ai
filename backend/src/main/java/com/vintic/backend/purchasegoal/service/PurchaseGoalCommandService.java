@@ -31,15 +31,18 @@ public class PurchaseGoalCommandService {
 
     private final PurchaseGoalRepository purchaseGoalRepository;
     private final UserRepository userRepository;
+    private final PurchaseGoalCapPolicy capPolicy;
     private final Clock clock;
 
     public PurchaseGoalCommandService(
             PurchaseGoalRepository purchaseGoalRepository,
             UserRepository userRepository,
+            PurchaseGoalCapPolicy capPolicy,
             Clock clock
     ) {
         this.purchaseGoalRepository = purchaseGoalRepository;
         this.userRepository = userRepository;
+        this.capPolicy = capPolicy;
         this.clock = clock;
     }
 
@@ -79,7 +82,7 @@ public class PurchaseGoalCommandService {
 
         PurchaseGoal saved = purchaseGoalRepository.save(goal);
         // 방금 만든 Goal이라 참여 이력이 있을 수 없다 - 조회 없이 0으로 고정한다.
-        return PurchaseGoalResponse.from(saved, 0, 0);
+        return PurchaseGoalResponse.from(saved, 0, 0, capPolicy.capRatio());
     }
 
     // OrderQueryService.getOrder()와 동일한 소유자 검증 관례(404 -> 403 순서)를 쓴다.

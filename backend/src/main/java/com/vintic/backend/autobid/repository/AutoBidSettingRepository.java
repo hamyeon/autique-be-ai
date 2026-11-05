@@ -112,8 +112,12 @@ public interface AutoBidSettingRepository extends JpaRepository<AutoBidSetting, 
     // (Day 5/6이 같은 goal로 같은 경매에 두 번 등록하지 않는다), 호출부가 auctionId로 다시 묶어
     // "경매별로 한 번"을 한 번 더 보장한다.
     // #143: 참여 이력이 항상 같은 순서로 나오도록 참여(AutoBid 등록) 순서 - createdAt, id 오름차순 - 로 정렬한다.
+    // maxAmount/estimatedPriceAtEngage는 참여 당시 저장된 값 그대로다 - 조회 시점 시세나 cap-ratio로
+    // 다시 계산하지 않는다(GET /api/purchase-goals/{id}의 participations[].autoBidCap/estimatedPriceAtEngage).
     @Query("""
-            select s.purchaseGoalId as goalId, s.auction.id as auctionId from AutoBidSetting s
+            select s.purchaseGoalId as goalId, s.auction.id as auctionId,
+                   s.maxAmount as maxAmount, s.estimatedPriceAtEngage as estimatedPriceAtEngage
+            from AutoBidSetting s
             where s.purchaseGoalId in :goalIds
             order by s.createdAt asc, s.id asc
             """)
@@ -122,5 +126,7 @@ public interface AutoBidSettingRepository extends JpaRepository<AutoBidSetting, 
     interface PurchaseGoalAuctionPair {
         Long getGoalId();
         Long getAuctionId();
+        Long getMaxAmount();
+        Long getEstimatedPriceAtEngage();
     }
 }

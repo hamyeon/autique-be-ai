@@ -91,17 +91,17 @@ public class PurchaseGoalResultObservationService {
         // 함께 된다.
         if (status == PurchaseGoalStatus.CANCEL_REQUESTED) {
             if (purchaseGoalRepository.resolveCancelRequestedToCancelled(goalId, auctionId, now) == 1) {
-                notificationRecorder.recordPurchaseAgentLost(goal.getUser(), goalId, auctionId, false);
+                notificationRecorder.recordPurchaseAgentLost(goal.getUser(), goalId, auctionId, PurchaseGoalStatus.CANCELLED);
             }
             return;
         }
         if (goal.getDeadline().isAfter(now)) {
             if (purchaseGoalRepository.resolveLossToActive(goalId, auctionId, now) == 1) {
-                notificationRecorder.recordPurchaseAgentLost(goal.getUser(), goalId, auctionId, true);
+                notificationRecorder.recordPurchaseAgentLost(goal.getUser(), goalId, auctionId, PurchaseGoalStatus.ACTIVE);
             }
         } else {
             if (purchaseGoalRepository.resolveLossToExpired(goalId, auctionId, now) == 1) {
-                notificationRecorder.recordPurchaseAgentLost(goal.getUser(), goalId, auctionId, false);
+                notificationRecorder.recordPurchaseAgentLost(goal.getUser(), goalId, auctionId, PurchaseGoalStatus.EXPIRED);
             }
         }
     }

@@ -1724,7 +1724,8 @@ X-User-Id: {userId}
 - `FULFILLED`·`CANCELLED`·`EXPIRED`는 끝난 상태이며 다시 바뀌지 않습니다.
 - **취소의 의미:** `DELETE`는 앞으로의 탐색을 멈추는 요청입니다. 이미 걸린 자동입찰을 **철회하지 않습니다** — 참여 중인
   경매는 그대로 진행되고, 거기서 낙찰하면 `FULFILLED`가 됩니다.
-- 상태 전이(만료 → 결과 반영 → 탐색·참여)는 서버 스캔이 **5분마다**(`purchase-agent.scan.cron`, 기본 `0 */5 * * * *`) 처리합니다.
+- 상태 전이(만료 → 결과 반영 → 탐색·참여)는 서버 스캔이 설정된 주기마다(`purchase-agent.scan.cron`, 기본값 `0 */5 * * * *`, 환경마다 다를 수 있음) 처리합니다.
+  참여 경매의 승패 반영과 `PURCHASE_AGENT_LOST` 알림은 **경매 종료 후 다음 결과 관찰 스캔**에서 처리됩니다.
   스캔은 `purchase-agent.scan.enabled=true`(환경변수 `PURCHASE_AGENT_SCAN_ENABLED`)일 때만 돕니다 — **기본값은 `false`**이고,
   Worker 프로필은 항상 꺼져 있습니다. 꺼져 있으면 목표는 등록·조회·취소만 되고 상태가 자동으로 바뀌지 않습니다.
   저장소의 배포 설정 파일에는 이 값을 켜는 설정이 없습니다(실제 서버 환경변수로 켰는지는 별도 확인 필요).
@@ -1735,9 +1736,11 @@ X-User-Id: {userId}
 - 필터: `modelKey`가 있으면 그 모델만, 없으면 `brand`가 있을 때 브랜드 일치로 거릅니다. 상품 등급이 `minCondition` 이상
   (`DS > S > A > B > C`, 등급을 알 수 없는 매물은 제외), `sizeKr`가 있으면 같은 사이즈만, 예산이 그 경매의 최소 다음 입찰가 이상,
   서버 시세를 계산할 수 있는 매물만 남깁니다. 남은 후보는 매물 판정(AI 또는 규칙 기반)을 거칩니다.
-- 자동입찰 상한(cap) = `min(hardMaxAmount, 서버 시세 × 2.0)`. 이 값이 최소 다음 입찰가보다 낮으면 참여하지 않습니다.
+- 자동입찰 상한(cap) = `min(hardMaxAmount, floor(서버 시세 × capRatio))`. `capRatio`는 서버 설정(`purchase-agent.cap-ratio`,
+  기본 2.0)이며 목표 응답의 `capRatio` 필드로 내려갑니다. 이 값이 최소 다음 입찰가보다 낮으면 참여하지 않습니다.
   (2026-11-05: 배율 1.0 → 2.0. 시세보다 비싸게 입찰할 수 있어, 참여 알림 본문에 "다음 입찰가가 시세의 몇 배인지"가 붙습니다.)
-  **실제로 걸린 cap은 아래 "참여 경매·cap 조회"의 API로 읽으세요 — FE가 예산·시세로 다시 계산하지 않습니다.**
+  **실제로 걸린 cap과 그때 쓴 시세는 `GET /api/purchase-goals/{id}`의 `participations[].autoBidCap`·`estimatedPriceAtEngage`로
+  읽으세요 — FE가 예산·시세·`capRatio`로 다시 계산하지 않습니다.**
 - 한 번에 한 경매에만 참여합니다(가장 적합한 후보 1개).
 
 ---
@@ -1790,11 +1793,16 @@ X-User-Id: {userId}
     "currentAuctionId": null,
     "createdAt": "2026-10-31T21:00:00+09:00",
     "participationCount": 0,
-    "wonCount": 0
+    "wonCount": 0,
+    "capRatio": 2.0
   },
   "error": null
 }
 ```
+
+- `capRatio` (`number`, null 아님): **현재 적용 중인 상한 배수 설정**(`purchase-agent.cap-ratio`). 확인·상세 화면의
+  "AI 시세의 최대 N배까지 입찰할 수 있어요" 표시에 씁니다. 앞으로의 참여에 쓰일 값이며, 과거 참여의 실제 상한은
+  상세의 `participations[].autoBidCap`으로 확인합니다. 서버 설정이 바뀌면 이 값도 바뀝니다.
 
 ### Failure
 
@@ -1814,6 +1822,7 @@ X-User-Id: {userId}
 | `currentAuctionId` | 지금 참여 중인 경매 ID(`ENGAGED`/`CANCEL_REQUESTED`). `FULFILLED`면 **낙찰한 경매 ID가 남아 있습니다**. `ACTIVE`(재탐색 포함)·`CANCELLED`(`ACTIVE`에서 취소)·`EXPIRED`(`ACTIVE`에서 만료)는 `null`. 참여 경매 패배·취소 후 `EXPIRED`·`CANCELLED`로 끝난 경우에는 **마지막 참여 경매 ID가 그대로 남습니다** — 진행 중 여부는 `currentAuctionId`가 아니라 `status`로 판단하세요 |
 | `participationCount` | 자동입찰을 실제로 건 경매 수(평가만 하고 참여하지 않은 경매 제외) |
 | `wonCount` | 그중 본인 주문이 생긴(낙찰한) 경매 수 |
+| `capRatio` | 현재 적용 중인 상한 배수 설정(등록 응답과 같은 의미, `number`) |
 
 ## GET /api/purchase-goals/{id} — 목표 상세(+참여 이력)
 
@@ -1826,9 +1835,10 @@ X-User-Id: {userId}
     "id": 12, "status": "FULFILLED", "currentAuctionId": 31, "participationCount": 2, "wonCount": 1,
     "...": "목록과 같은 필드",
     "participations": [
-      { "auctionId": 30, "status": "LOST", "auctionStatus": "ENDED" },
-      { "auctionId": 31, "status": "WON", "auctionStatus": "ENDED" }
-    ]
+      { "auctionId": 30, "status": "LOST", "auctionStatus": "ENDED", "estimatedPriceAtEngage": null, "autoBidCap": 150000 },
+      { "auctionId": 31, "status": "WON", "auctionStatus": "ENDED", "estimatedPriceAtEngage": 20000, "autoBidCap": 40000 }
+    ],
+    "capRatio": 2.0
   },
   "error": null
 }
@@ -1839,6 +1849,8 @@ X-User-Id: {userId}
 | `auctionId` | 참여한 경매 ID — 경매 상세 `GET /api/auctions/{auctionId}`, 실시간 `GET /api/auctions/{auctionId}/live`로 이동할 ID |
 | `status` | `SCHEDULED`(참여 예정, 경매 시작 전) / `LIVE`(진행 중) / `WON`(종료 + 본인 주문 있음) / `LOST`(종료 + 본인 주문 없음, **또는 경매 취소**) |
 | `auctionStatus` | 경매의 현재 상태 그대로(#143 추가): `SCHEDULED` / `LIVE` / `ENDED` / `CANCELED`. `status = LOST`일 때 `ENDED`면 패배, `CANCELED`면 경매 취소 |
+| `estimatedPriceAtEngage` | `number` \| `null`. 이 참여의 상한을 계산할 때 쓴 AI(서버) 시세 — 참여 직전에 다시 계산한 값. 참여 당시 저장한 값이며 이후 시세가 바뀌어도 그대로입니다. 이 필드 도입 전 참여는 당시 값을 복원할 수 없어 `null`(현재 시세로 채우지 않음). 경매 상세의 현재 `aiEstimatedPrice`와 다른 값일 수 있습니다 |
+| `autoBidCap` | `number`. 이 참여에서 실제로 등록한 자동입찰 상한 = `min(hardMaxAmount, floor(estimatedPriceAtEngage × 당시 capRatio))`. 저장값 그대로이며 조회 시 다시 계산하지 않습니다. 기존 참여에도 값이 있습니다 |
 
 - 순서: **참여(자동입찰 등록) 순서**(오래된 것부터).
 - 참여 이력은 조회 시점의 경매 상태와 주문으로 계산합니다. 상태가 언제 바뀌었는지(시각)는 저장하지 않습니다.
@@ -1898,7 +1910,12 @@ X-User-Id: {userId}
 
 1. `POST /api/purchase-goals/parse` → 초안. `warnings`를 그대로 보여 주고, 첫 줄이 "AI 해석에 실패해..."면 규칙 기반 초안이니 수정 유도. `confidence < 0.7`이면 수정 유도 강조. parse가 실패(`50003`)하면 빈 폼으로 직접 입력.
 2. 확인 화면에서 `null`인 필수 값을 사용자가 입력. 초안 `deadline`이 `null`(문장에 기한 없음)이면 기한을 다시 물어 채운다.
-3. `POST /api/purchase-goals` → `201`, `status: ACTIVE`.
+3. `POST /api/purchase-goals` → `201`, `status: ACTIVE`. 응답의 `capRatio`로 "AI 시세의 최대 N배까지 입찰" 안내를 표시할 수 있습니다.
+
+> **확인 화면(등록 전)의 `capRatio`:** parse 응답(`GoalDraft`)에는 `capRatio`가 없습니다. 등록 전에 이 안내를 띄우려면
+> parse 응답에 필드를 추가하는 계약 변경이 필요합니다(AI 담당 영역 — `ai.purchase` 패키지, 이번 변경에 미포함).
+> 제안 계약: `POST /api/purchase-goals/parse` 응답 `data`에 `capRatio: number`(등록 응답과 같은 값, `PurchaseGoalCapPolicy.capRatio()`)
+> 추가. 그 전까지는 등록 응답 이후 화면에서 표시하고, FE에 2.0을 하드코딩하지 마세요.
 
 ### 2. 진행 상태·참여 경매
 
@@ -1907,7 +1924,8 @@ X-User-Id: {userId}
 | 목표 상태 | `GET /api/purchase-goals/{id}` → `status` |
 | 참여 중인 경매 ID | 같은 응답 `currentAuctionId`(`status`가 `ENGAGED`/`CANCEL_REQUESTED`일 때) 또는 `participations[]` 중 `status`가 `SCHEDULED`/`LIVE`인 항목 |
 | 상품명·썸네일·경매 status·startsAt·startPrice | `GET /api/auctions/{auctionId}` → `product.name`, `product.imageUrls[0]`, `status`, `startsAt`, `startPrice` (auction-spec §1) |
-| 실제 자동입찰 cap | `GET /api/auctions/{auctionId}` → `myState.autoBidCap` 또는 `GET /api/auctions/{auctionId}/auto-bids/me` → `maxAmount` (auction-spec §6). 본인 자동입찰이 없으면 각각 `null` / `404`(`40404`) |
+| 실제 자동입찰 cap | `GET /api/purchase-goals/{id}` → `participations[].autoBidCap`(참여별, 참여 당시 시세는 `estimatedPriceAtEngage`). 경매 화면에서는 `GET /api/auctions/{auctionId}` → `myState.autoBidCap` 또는 `GET /api/auctions/{auctionId}/auto-bids/me` → `maxAmount` (auction-spec §6). 본인 자동입찰이 없으면 각각 `null` / `404`(`40404`) |
+| 상한 배수 안내("AI 시세의 최대 N배") | 목표 등록·목록·상세 응답의 `capRatio`. **등록 전 확인 화면**에서는 아직 목표가 없어 이 값을 받을 곳이 없습니다 — 아래 1번 참고 |
 | 이 경매가 에이전트 관리인지 | `myState.purchaseGoalId`(이 자동입찰을 만든 목표 ID, 목표가 끝나도 남음) / `myState.managedByPurchaseAgent`(지금 에이전트가 관리 중인지 — 목표가 `ENGAGED`·`CANCEL_REQUESTED`이고 이 경매가 `currentAuctionId`일 때만 `true`). `GET .../auto-bids/me`에도 같은 두 필드 |
 | 상세·실시간 화면 이동 | `auctionId`로 `GET /api/auctions/{auctionId}`, `GET /api/auctions/{auctionId}/live` |
 | 경매 시작 안내 | 참여 경매의 `status`가 `SCHEDULED` → `LIVE`로 바뀐 것을 조회로 확인(별도 알림 없음) |
@@ -1933,7 +1951,7 @@ X-User-Id: {userId}
 | `type` | 생기는 때 | `auctionId` | `resourceId` | 문구(`title` / `body`) |
 | --- | --- | --- | --- | --- |
 | `PURCHASE_AGENT_ENGAGED` | 에이전트가 경매에 자동입찰을 등록함 | 참여 경매 | 목표 ID | "구매 대행이 입찰을 시작했습니다" / "설정하신 조건에 맞는 경매를 찾아 자동입찰을 등록했습니다. 다음 입찰가 30,000원은 AI 시세(20,000원)의 1.5배입니다. 최대 40,000원(시세의 2배)까지 자동으로 입찰합니다." (시세보다 싸면 "AI 시세(…)보다 N% 저렴합니다.") |
-| `PURCHASE_AGENT_LOST` | 참여 경매 패배·경매 취소가 반영됨 | 그 경매 | 목표 ID | "구매 대행이 낙찰하지 못했습니다" / 계속 찾는 중이면 "...계속해서 조건에 맞는 경매를 찾고 있습니다.", 끝났으면(`EXPIRED`·`CANCELLED`) "...더 이상 참여할 수 있는 경매가 없어 구매 대행을 종료합니다." |
+| `PURCHASE_AGENT_LOST` | 참여 경매 패배·경매 취소가 반영됨(경매 종료 후 다음 결과 관찰 스캔) | 그 경매 | 목표 ID | "구매 대행이 낙찰하지 못했습니다" / 목표 상태에 따라: `ACTIVE`(마감 전) "이번 경매는 낙찰하지 못했습니다. 계속해서 조건에 맞는 경매를 찾고 있습니다." · `EXPIRED`(마감 경과) "이번 경매는 낙찰하지 못했습니다. 구매 목표의 마감 시간이 지나 구매 대행을 종료합니다." · `CANCELLED`(취소 요청 후 패배) "이번 경매는 낙찰하지 못했습니다. 취소 요청에 따라 구매 대행을 종료합니다." |
 | `AUCTION_WON` | 낙찰(에이전트 경매 포함, 별도 에이전트 타입 없음) | 경매 | 주문 ID | "낙찰되었습니다" |
 
 채팅 화면 문장은 FE가 **목표 상태 + 참여 이력 + 위 알림**으로 구성합니다. 서버는 상태 전이 이력(언제 어떤 상태였는지)을
