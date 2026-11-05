@@ -63,6 +63,7 @@ GoalParser (인터페이스, 설계안 6-4)
         │
         ▼
 GoalDraft (초안) → 프론트 확인·수정 화면 → POST /api/purchase-goals (백엔드 담당, #109로 구현)
+  (응답은 GoalParseResponse = GoalDraft 필드 + capRatio. capRatio는 AI 출력이 아니라 컨트롤러가 넣는 서버 설정값)
 ```
 
 `POST /api/purchase-goals`는 #109에서 `PurchaseGoalController`로 구현됐다. 같이 `GET /api/purchase-goals`(목록),

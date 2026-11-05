@@ -1652,7 +1652,8 @@ X-User-Id: {userId}
     "warnings": [
       "사이즈가 없습니다. 사이즈를 지정하지 않으면 모든 사이즈가 후보가 됩니다.",
       "기한이 없습니다. 언제까지 찾을지 정해 주세요."
-    ]
+    ],
+    "capRatio": 2.0
   },
   "error": null
 }
@@ -1674,6 +1675,7 @@ X-User-Id: {userId}
 | `freeTextConditions` | `string \| null` | 위 필드에 담기지 않은 희망 사항 원문("박스 있으면 좋음", "시카고 컬러"). **v1에서는 필수 조건이 아니라 참고 사항**으로만 쓰입니다 |
 | `confidence` | `number` | 0~1. 초안 전체가 의도와 맞을 확신도. **0.7 미만이면 확인 화면에서 수정 유도를 강조**해 주세요(설계안 6-1). 서버 로직에는 쓰이지 않습니다 |
 | `warnings` | `string[]` | 확인 화면에 그대로 보여줄 안내문. 비어 있을 수 있습니다 |
+| `capRatio` | `number` (null 아님) | **AI 결과가 아닙니다.** 서버가 응답을 만들 때 넣는 현재 상한 배수 설정(`purchase-agent.cap-ratio`, 기본 2.0) — 목표 등록·상세 응답의 `capRatio`와 같은 값. 확인 화면의 "AI 시세의 최대 N배까지 입찰할 수 있어요" 표시에 쓰고 FE에 2.0을 하드코딩하지 마세요. 등록 요청 바디에는 넣지 않습니다(`CreatePurchaseGoalRequest`에 없는 필드) |
 
 ### 프론트 적용 시 유의사항
 
@@ -1910,12 +1912,8 @@ X-User-Id: {userId}
 
 1. `POST /api/purchase-goals/parse` → 초안. `warnings`를 그대로 보여 주고, 첫 줄이 "AI 해석에 실패해..."면 규칙 기반 초안이니 수정 유도. `confidence < 0.7`이면 수정 유도 강조. parse가 실패(`50003`)하면 빈 폼으로 직접 입력.
 2. 확인 화면에서 `null`인 필수 값을 사용자가 입력. 초안 `deadline`이 `null`(문장에 기한 없음)이면 기한을 다시 물어 채운다.
-3. `POST /api/purchase-goals` → `201`, `status: ACTIVE`. 응답의 `capRatio`로 "AI 시세의 최대 N배까지 입찰" 안내를 표시할 수 있습니다.
-
-> **확인 화면(등록 전)의 `capRatio`:** parse 응답(`GoalDraft`)에는 `capRatio`가 없습니다. 등록 전에 이 안내를 띄우려면
-> parse 응답에 필드를 추가하는 계약 변경이 필요합니다(AI 담당 영역 — `ai.purchase` 패키지, 이번 변경에 미포함).
-> 제안 계약: `POST /api/purchase-goals/parse` 응답 `data`에 `capRatio: number`(등록 응답과 같은 값, `PurchaseGoalCapPolicy.capRatio()`)
-> 추가. 그 전까지는 등록 응답 이후 화면에서 표시하고, FE에 2.0을 하드코딩하지 마세요.
+   확인 화면의 "AI 시세의 최대 N배까지 입찰할 수 있어요"는 parse 응답의 `capRatio`로 표시한다(AI가 아니라 서버 설정값).
+3. `POST /api/purchase-goals` → `201`, `status: ACTIVE`. 등록 이후 화면은 응답의 `capRatio`를 쓴다(같은 값).
 
 ### 2. 진행 상태·참여 경매
 
@@ -1925,7 +1923,7 @@ X-User-Id: {userId}
 | 참여 중인 경매 ID | 같은 응답 `currentAuctionId`(`status`가 `ENGAGED`/`CANCEL_REQUESTED`일 때) 또는 `participations[]` 중 `status`가 `SCHEDULED`/`LIVE`인 항목 |
 | 상품명·썸네일·경매 status·startsAt·startPrice | `GET /api/auctions/{auctionId}` → `product.name`, `product.imageUrls[0]`, `status`, `startsAt`, `startPrice` (auction-spec §1) |
 | 실제 자동입찰 cap | `GET /api/purchase-goals/{id}` → `participations[].autoBidCap`(참여별, 참여 당시 시세는 `estimatedPriceAtEngage`). 경매 화면에서는 `GET /api/auctions/{auctionId}` → `myState.autoBidCap` 또는 `GET /api/auctions/{auctionId}/auto-bids/me` → `maxAmount` (auction-spec §6). 본인 자동입찰이 없으면 각각 `null` / `404`(`40404`) |
-| 상한 배수 안내("AI 시세의 최대 N배") | 목표 등록·목록·상세 응답의 `capRatio`. **등록 전 확인 화면**에서는 아직 목표가 없어 이 값을 받을 곳이 없습니다 — 아래 1번 참고 |
+| 상한 배수 안내("AI 시세의 최대 N배") | 등록 전 확인 화면: `POST /api/purchase-goals/parse` 응답의 `capRatio`. 등록 이후: 목표 등록·목록·상세 응답의 `capRatio`(같은 설정값) |
 | 이 경매가 에이전트 관리인지 | `myState.purchaseGoalId`(이 자동입찰을 만든 목표 ID, 목표가 끝나도 남음) / `myState.managedByPurchaseAgent`(지금 에이전트가 관리 중인지 — 목표가 `ENGAGED`·`CANCEL_REQUESTED`이고 이 경매가 `currentAuctionId`일 때만 `true`). `GET .../auto-bids/me`에도 같은 두 필드 |
 | 상세·실시간 화면 이동 | `auctionId`로 `GET /api/auctions/{auctionId}`, `GET /api/auctions/{auctionId}/live` |
 | 경매 시작 안내 | 참여 경매의 `status`가 `SCHEDULED` → `LIVE`로 바뀐 것을 조회로 확인(별도 알림 없음) |

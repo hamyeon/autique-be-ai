@@ -148,9 +148,12 @@ AutoBid 생성이 실패하면 **예외를 삼키지 않아** 목표 전이까�
 - **마이그레이션**: `backend/scripts/migrations/auto-bid-estimated-price-at-engage.sql`(재실행 안전, 배포 전 적용 —
   Worker는 `ddl-auto: validate`라 컬럼이 먼저 있어야 기동한다).
 
-**`capRatio` 응답 필드**: 목표 등록·목록·상세 응답의 `capRatio`는 `PurchaseGoalCapPolicy.capRatio()` — **지금
+**`capRatio` 응답 필드**: parse 응답(`GoalParseResponse`)과 목표 등록·목록·상세 응답의 `capRatio`는 모두
+`PurchaseGoalCapPolicy.capRatio()` — **지금
 적용 중인** `purchase-agent.cap-ratio` 설정값이다. 앞으로의 참여에 쓰일 배수일 뿐이며, 과거 참여의 실제 상한은
 `participations[].autoBidCap`으로 본다(설정이 바뀌면 `capRatio`만 바뀌고 과거 `autoBidCap`은 그대로다).
+parse 응답의 `capRatio`는 AI가 만들지 않는다 — `GoalDraft`·LLM 스키마에는 없고, `GoalParseController`가 응답을 조립할 때
+설정값을 덧붙인다(등록 전 확인 화면의 "AI 시세의 최대 N배" 안내용).
 
 ### 잠금·경쟁 처리와 충돌 방지
 - `createAutoBid`는 경매를 **비관적 락**으로 잠그고 생성되므로, **수동 입찰이나 기존 AutoBid와의 충돌**은
