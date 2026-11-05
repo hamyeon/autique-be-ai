@@ -1,9 +1,6 @@
 # Autique 경매 · 구매 에이전트 정책
 
 > 팀 공유용 · 2026-11-05  
-> 구현 기준: `Auction`, `BidCommandService`, `AutoBidCommandService`, `ProxyPriceEngine`, `purchasegoal/*`
-
-실제 구현을 읽고 정리한 정책을 바탕으로 작성했습니다. 코드 검토 단계에서 테스트는 실행하지 않았으며, 검증하지 않은 리스크는 마지막에 별도로 정리합니다.
 
 ## 목차
 
