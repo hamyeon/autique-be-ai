@@ -76,6 +76,16 @@ public class PriceCalculationService {
         // 숫자를 판매자에게 주게 된다 - 틀린 값보다 "없음"이 낫다. (현재 데이터에서
         // eBay 전용 모델은 없어서 실제로는 기존과 같은 요청만 이 분기에 온다)
         if (kreamAveragePrice == 0) {
+            // 3순위: 브랜드 전체 중고 시세. 모델을 특정 못 했거나(Vision이 브랜드만 읽음,
+            // "컨버스 하이") 시세 카탈로그 밖 모델일 때 "없음" 대신 넓은 범위의 추정을 준다.
+            // 모델별 차이가 커서 정확도가 가장 낮다 - 추천 사유에 그대로 밝힌다.
+            Optional<UsedMarketPriceProvider.BrandPrice> brandMarket =
+                    usedMarketPriceProvider.findBrand(request.brand());
+            if (brandMarket.isPresent()) {
+                log.info("브랜드 시세 폴백(3순위): brand={}, model={}", request.brand(), request.modelName());
+                return calculateFromBrandMarket(request, brandMarket.get(), ebayAveragePrice, ebayMatches);
+            }
+
             // 어떤 근거로도 가격을 못 준 요청. 커버리지 확대 우선순위의 1급 근거다(#89).
             log.info("시세 정보 없음 응답: brand={}, model={}, color={}, size={}",
                     request.brand(), request.modelName(), request.color(), request.size());
@@ -280,6 +290,83 @@ public class PriceCalculationService {
                 reason,
                 List.of(),
                 List.of()
+        );
+    }
+
+    /**
+     * 브랜드 전체 중고 시세로 계산한다(3순위). 상태·구성품 반영은 모델 시세 경로와 같은
+     * "전체 매물 대비 비율"이고, 모델을 모르므로 상태 계수는 공통 계수를 쓴다.
+     * 색상 보정은 하지 않는다 - 색상 버킷은 모델 단위로만 서 있다.
+     */
+    private CalculatePriceResponse calculateFromBrandMarket(
+            CalculatePriceRequest request,
+            UsedMarketPriceProvider.BrandPrice market,
+            int ebayAveragePrice,
+            List<MarketPriceRow> ebayMatches) {
+
+        String normalizedConditionGrade = normalizeConditionGrade(request.conditionGrade());
+        ConditionRateProvider.ConditionRate gradeRate =
+                conditionRateProvider.resolve(null, normalizedConditionGrade);
+        ConditionRateProvider.ConditionRate baselineRate =
+                conditionRateProvider.resolve(null, ALL_CONDITION_GRADE);
+        double conditionRatio = UNKNOWN_CONDITION_GRADE.equals(normalizedConditionGrade)
+                ? 1.0
+                : gradeRate.rate() / baselineRate.rate();
+
+        String normalizedComponentStatus = normalizeComponentStatus(request.componentStatus());
+        ComponentRateProvider.ComponentRate componentRate =
+                componentRateProvider.resolve(normalizedComponentStatus);
+        double componentRatio = UNKNOWN_COMPONENT_STATUS.equals(normalizedComponentStatus)
+                ? 1.0
+                : componentRate.rate();
+
+        double ratio = conditionRatio * componentRatio;
+        int recommendedPrice = roundToNearestThousand((int) Math.round(market.medianPrice() * ratio));
+        int minRecommendedPrice = roundToNearestThousand((int) Math.round(market.q1Price() * ratio));
+        int maxRecommendedPrice = roundToNearestThousand((int) Math.round(market.q3Price() * ratio));
+        String priceRange = makePriceRange(minRecommendedPrice, maxRecommendedPrice);
+
+        String rateBasisText = UNKNOWN_CONDITION_GRADE.equals(normalizedConditionGrade)
+                ? ""
+                : makeRateBasisText(gradeRate);
+
+        String reason = String.format(
+                "입력한 모델(%s)의 시세 데이터가 없어, 당근마켓·후르츠패밀리에 올라온 %s 브랜드 전체 중고 매물 %d건을 "
+                        + "근거로 추정했습니다. 같은 브랜드라도 모델·종류에 따라 가격 차이가 커서 참고용 추정치이며, "
+                        + "모델명을 정확히 입력하면 더 정확한 추천가를 받을 수 있습니다. "
+                        + "브랜드 실거래가 중앙값은 %,d원이고, 매물의 절반이 %,d원 ~ %,d원 사이에 있습니다. "
+                        + "상품 상태 %s(%s)는 전체 매물 시세 대비 %.0f%% 수준으로 반영했습니다.%s %s "
+                        + "이를 바탕으로 추정 추천가는 %,d원이며, 판매 권장 범위는 %s입니다.",
+                request.modelName() == null || request.modelName().isBlank() ? "미확인" : request.modelName(),
+                market.brand(),
+                market.listingCount(),
+                market.medianPrice(),
+                market.q1Price(),
+                market.q3Price(),
+                normalizedConditionGrade,
+                getConditionDescription(normalizedConditionGrade),
+                conditionRatio * 100,
+                rateBasisText,
+                makeComponentText(
+                        request.componentStatus(),
+                        new ComponentRateProvider.ComponentRate(
+                                componentRatio, componentRate.basis(), componentRate.sampleSize())),
+                recommendedPrice,
+                priceRange
+        );
+
+        // KREAM 필드는 0, eBay는 참고 정보로만 싣는다("시세 정보 없음" 응답과 같은 규칙).
+        return new CalculatePriceResponse(
+                recommendedPrice,
+                market.medianPrice(),
+                0,
+                ebayAveragePrice,
+                minRecommendedPrice,
+                maxRecommendedPrice,
+                priceRange,
+                reason,
+                List.of(),
+                toResponseMatches(ebayMatches)
         );
     }
 

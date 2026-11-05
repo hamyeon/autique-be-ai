@@ -55,11 +55,12 @@ final class GoalParseHarnessReport {
         out.append("minCondition  %s%n".formatted(pct(GoalParseHarnessScorer.CaseScore::conditionOk)));
         out.append("hardMaxAmount %s%n".formatted(pct(GoalParseHarnessScorer.CaseScore::amountOk)));
         out.append("sizeKr        %s%n".formatted(pct(GoalParseHarnessScorer.CaseScore::sizeOk)));
-        out.append("5필드 전부     %s%n".formatted(pct(GoalParseHarnessScorer.CaseScore::allFieldsOk)));
+        out.append("deadline      %s%n".formatted(pct(GoalParseHarnessScorer.CaseScore::deadlineOk)));
+        out.append("6필드 전부     %s%n".formatted(pct(GoalParseHarnessScorer.CaseScore::allFieldsOk)));
         out.append("자유조건 재현율 %.0f%% (키워드 있는 케이스 %d건)%n".formatted(
                 100 * mean(s -> s.keywordRecall(), s -> !Double.isNaN(s.keywordRecall())),
                 scores.stream().filter(s -> !Double.isNaN(s.keywordRecall())).count()));
-        out.append("confidence 평균 - 5필드 정답 %.2f / 오답 %.2f%n".formatted(
+        out.append("confidence 평균 - 6필드 정답 %.2f / 오답 %.2f%n".formatted(
                 mean(GoalParseHarnessScorer.CaseScore::confidence, GoalParseHarnessScorer.CaseScore::allFieldsOk),
                 mean(GoalParseHarnessScorer.CaseScore::confidence, s -> !s.allFieldsOk() && !s.failed())));
         out.append("지연 평균 %.0fms, 최대 %dms%n".formatted(
@@ -95,6 +96,10 @@ final class GoalParseHarnessReport {
             }
             if (!score.sizeOk()) {
                 out.append("    sizeKr: 기대 %s / 실제 %s%n".formatted(expected.sizeKr(), score.draft().sizeKr()));
+            }
+            if (!score.deadlineOk()) {
+                out.append("    deadline: 기대 %s / 실제 %s%n".formatted(expected.deadline(),
+                        score.draft().deadline() == null ? null : score.draft().deadline().toLocalDate()));
             }
             if (!Double.isNaN(score.keywordRecall()) && score.keywordRecall() < 1.0) {
                 out.append("    freeText: 기대 키워드 %s / 실제 \"%s\"%n".formatted(

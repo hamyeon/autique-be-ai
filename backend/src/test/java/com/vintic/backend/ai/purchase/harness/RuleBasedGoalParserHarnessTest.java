@@ -31,7 +31,7 @@ class RuleBasedGoalParserHarnessTest {
     @Test
     void 픽스처_전체를_돌려_필드별_정확도를_측정하고_기준선을_지킨다() throws IOException {
         GoalParseHarnessFixtures.Document fixtures = GoalParseHarnessFixtures.load();
-        RuleBasedGoalParser parser = new RuleBasedGoalParser(new ModelAliases());
+        RuleBasedGoalParser parser = new RuleBasedGoalParser(new ModelAliases(), fixtures.clock());
 
         List<GoalParseHarnessScorer.CaseScore> scores = new ArrayList<>();
         for (GoalParseHarnessCase harnessCase : fixtures.cases()) {

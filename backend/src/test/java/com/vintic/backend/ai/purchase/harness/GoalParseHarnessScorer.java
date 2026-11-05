@@ -2,6 +2,7 @@ package com.vintic.backend.ai.purchase.harness;
 
 import com.vintic.backend.ai.purchase.dto.GoalDraft;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Objects;
 
@@ -15,6 +16,7 @@ final class GoalParseHarnessScorer {
             boolean conditionOk,
             boolean amountOk,
             boolean sizeOk,
+            boolean deadlineOk,
             // 키워드가 없는 케이스는 NaN - 평균에서 뺀다.
             double keywordRecall,
             double confidence,
@@ -25,7 +27,7 @@ final class GoalParseHarnessScorer {
     ) {
 
         boolean allFieldsOk() {
-            return brandOk && modelKeyOk && conditionOk && amountOk && sizeOk;
+            return brandOk && modelKeyOk && conditionOk && amountOk && sizeOk && deadlineOk;
         }
 
         boolean failed() {
@@ -33,7 +35,7 @@ final class GoalParseHarnessScorer {
         }
 
         static CaseScore failed(GoalParseHarnessCase harnessCase, long latencyMs, RuntimeException e) {
-            return new CaseScore(harnessCase.id(), false, false, false, false, false, Double.NaN,
+            return new CaseScore(harnessCase.id(), false, false, false, false, false, false, Double.NaN,
                     0.0, latencyMs, e.getClass().getSimpleName() + ": " + e.getMessage(), null, harnessCase);
         }
     }
@@ -44,6 +46,8 @@ final class GoalParseHarnessScorer {
     static CaseScore score(GoalParseHarnessCase harnessCase, GoalDraft draft, long latencyMs) {
         GoalParseHarnessCase.Expected expected = harnessCase.expected();
         String actualCondition = draft.minCondition() == null ? null : draft.minCondition().name();
+        LocalDate expectedDeadline = expected.deadline() == null ? null : LocalDate.parse(expected.deadline());
+        LocalDate actualDeadline = draft.deadline() == null ? null : draft.deadline().toLocalDate();
 
         return new CaseScore(
                 harnessCase.id(),
@@ -52,6 +56,7 @@ final class GoalParseHarnessScorer {
                 Objects.equals(expected.minCondition(), actualCondition),
                 Objects.equals(expected.hardMaxAmount(), draft.hardMaxAmount()),
                 Objects.equals(expected.sizeKr(), draft.sizeKr()),
+                Objects.equals(expectedDeadline, actualDeadline),
                 keywordRecall(expected.freeTextKeywords(), draft.freeTextConditions()),
                 draft.confidence(),
                 latencyMs,

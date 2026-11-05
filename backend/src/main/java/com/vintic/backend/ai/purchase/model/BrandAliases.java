@@ -1,6 +1,7 @@
 package com.vintic.backend.ai.purchase.model;
 
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -21,7 +22,7 @@ public final class BrandAliases {
     private static final Map<String, String> ALIASES = Map.ofEntries(
             Map.entry("나이키", "Nike"), Map.entry("nike", "Nike"), Map.entry("조던", "Nike"), Map.entry("jordan", "Nike"),
             Map.entry("아디다스", "Adidas"), Map.entry("adidas", "Adidas"),
-            // 이지(Yeezy)는 시세 카탈로그 밖이지만 브랜드는 아디다스다. "이지" 단독은 흔한 어미라 숫자 표기만.
+            // 이지(Yeezy)는 아디다스 라인이다. "이지" 단독은 흔한 어미라 숫자 표기만.
             Map.entry("이지350", "Adidas"), Map.entry("이지 350", "Adidas"), Map.entry("yeezy", "Adidas"),
             Map.entry("뉴발란스", "New Balance"), Map.entry("뉴발", "New Balance"),
             Map.entry("new balance", "New Balance"), Map.entry("newbalance", "New Balance"),
@@ -38,9 +39,15 @@ public final class BrandAliases {
             Map.entry("스케쳐스", "Skechers"), Map.entry("스케처스", "Skechers"), Map.entry("skechers", "Skechers"),
             Map.entry("어그", "UGG"), Map.entry("ugg", "UGG"),
             Map.entry("반스", "Vans"), Map.entry("vans", "Vans"),
-            // 시세 카탈로그 밖 브랜드. 이름만 같은 다른 브랜드 매물(골든구스 슈퍼스타, 알든 990 구두)을
-            // 브랜드 불일치로 걸러내기 위해 둔다. 카탈로그 브랜드가 아니므로 파서가 brand로 채우지는 않는다.
+            // 골든구스는 4차 확대부터 시세 카탈로그 브랜드다(goldengoose). 이름만 같은 아디다스 슈퍼스타와는
+            // 여전히 브랜드 불일치로 갈린다.
             Map.entry("골든구스", "Golden Goose"), Map.entry("golden goose", "Golden Goose"),
+            // 4차 카탈로그 확대로 들어온 브랜드. "킨" 단독은 "스킨·치킨"에 붙어 영문만 둔다.
+            Map.entry("keen", "Keen"),
+            Map.entry("핏플랍", "FitFlop"), Map.entry("fitflop", "FitFlop"),
+            Map.entry("락포트", "Rockport"), Map.entry("rockport", "Rockport"),
+            // 아래에는 시세 카탈로그 밖 브랜드도 섞여 있다. 이름만 같은 다른 브랜드 매물(알든 990 구두)을
+            // 브랜드 불일치로 걸러내기 위해 둔다.
             Map.entry("알든", "Alden"), Map.entry("alden", "Alden"),
             Map.entry("푸마", "Puma"), Map.entry("puma", "Puma"),
             Map.entry("리복", "Reebok"), Map.entry("reebok", "Reebok"),
@@ -78,6 +85,25 @@ public final class BrandAliases {
             }
         }
         return Optional.empty();
+    }
+
+    // 텍스트에 언급된 브랜드 전부. 모델 별칭의 requires_brand·브랜드 일치 판정에 쓴다.
+    public static Set<String> mentionedBrands(String text) {
+        if (text == null || text.isBlank()) {
+            return Set.of();
+        }
+        String normalized = ModelAliases.normalize(text);
+        Set<String> brands = new LinkedHashSet<>();
+        for (Alias alias : LONGEST_FIRST) {
+            if (normalized.contains(alias.normalized())) {
+                brands.add(alias.brand());
+            }
+        }
+        return brands;
+    }
+
+    public static boolean isKnownBrand(String brand) {
+        return brand != null && KNOWN_BRANDS.contains(brand.trim());
     }
 
     // LLM이 낸 브랜드 문자열을 표준 표기로 접는다. 모르는 브랜드면 비운다 - 시세 CSV에 없는

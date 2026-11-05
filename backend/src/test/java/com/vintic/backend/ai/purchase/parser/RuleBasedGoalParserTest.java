@@ -6,13 +6,22 @@ import com.vintic.backend.ai.purchase.model.ModelAliases;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
+import com.vintic.backend.config.ClockConfig;
+
+import java.time.Clock;
+import java.time.OffsetDateTime;
+import java.time.Instant;
+import java.time.LocalDate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 // 규칙 하나하나의 성질을 고정한다. 전체 정확도는 RuleBasedGoalParserHarnessTest가 잰다.
 class RuleBasedGoalParserTest {
 
-    private final RuleBasedGoalParser parser = new RuleBasedGoalParser(new ModelAliases());
+    private final RuleBasedGoalParser parser = new RuleBasedGoalParser(new ModelAliases(),
+            // 2026-11-05(목) 12:00 서울
+            Clock.fixed(Instant.parse("2026-11-05T03:00:00Z"), ClockConfig.APP_ZONE));
 
     @Test
     void 설계안_예시_문장을_구조화한다() {
@@ -153,5 +162,94 @@ class RuleBasedGoalParserTest {
         GoalDraft draft = parser.parse("뉴발 990 A급 270 15만원 이하");
 
         assertThat(draft.confidence()).isLessThanOrEqualTo(RuleBasedGoalParser.MAX_CONFIDENCE);
+    }
+
+    // 기준일 2026-11-05(목). 주는 일요일에 끝난다.
+    @ParameterizedTest
+    @CsvSource({
+            "오늘까지, 2026-11-05",
+            "내일까지, 2026-11-06",
+            "모레까지, 2026-11-07",
+            "3일 안에, 2026-11-08",
+            "3일 내로, 2026-11-08",
+            "10일 이내, 2026-11-15",
+            "2주 안에, 2026-11-19",
+            "1개월 이내로, 2026-12-05",
+            "4주 안에, 2026-12-03",
+            "일주일 안에, 2026-11-12",
+            "보름 안에, 2026-11-20",
+            "한 달 안에, 2026-12-05",
+            "이번 주까지, 2026-11-08",
+            "이번 주 안에, 2026-11-08",
+            "이번 주말까지, 2026-11-08",
+            "주말까지, 2026-11-08",
+            "다음 주까지, 2026-11-15",
+            "이번 달까지, 2026-11-30",
+            "이달 안에, 2026-11-30",
+            "11월 20일까지, 2026-11-20",
+            "12월 5일, 2026-12-05",
+            "11/20까지, 2026-11-20",
+            "12/1까지, 2026-12-01",
+            "11월 말까지, 2026-11-30",
+            "11월까지, 2026-11-30",
+            "20일까지, 2026-11-20",
+            "3일까지, 2026-12-03"
+    })
+    void 기한_표현을_기준일로부터_날짜로_바꾸고_23시59분으로_채운다(String phrase, LocalDate expected) {
+        GoalDraft draft = parser.parse("뉴발 990 270 15만원 이하 " + phrase);
+
+        assertThat(draft.deadline()).isEqualTo(expected.atTime(23, 59).atZone(ClockConfig.APP_ZONE).toOffsetDateTime());
+        assertThat(draft.warnings()).doesNotContain(GoalDraftWarnings.DEADLINE_MISSING);
+        // 기한 표현이 자유 조건에 남으면 안 된다.
+        assertThat(draft.freeTextConditions()).isNull();
+        // 기한 숫자가 다른 필드를 건드리지 않는다.
+        assertThat(draft.sizeKr()).isEqualTo(270);
+        assertThat(draft.hardMaxAmount()).isEqualTo(150_000L);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "뉴발 990 270 15만원 이하",
+            "뉴발 990 270 15만원 이하 빨리 구해요",
+            "뉴발 990 270 한 달 신은 거 15만원 이하",
+            "뉴발 990 270 15만원 이하 2주 신은 정도"
+    })
+    void 기한이_없거나_신발_사용_기간이면_null이고_다시_묻도록_경고를_붙인다(String text) {
+        GoalDraft draft = parser.parse(text);
+
+        assertThat(draft.deadline()).isNull();
+        assertThat(draft.warnings()).contains(GoalDraftWarnings.DEADLINE_MISSING);
+    }
+
+    @Test
+    void 날짜로_성립하지_않는_기한은_비우고_해석_실패_경고를_붙인다() {
+        GoalDraft draft = parser.parse("뉴발 990 270 15만원 이하 2월 30일까지");
+
+        assertThat(draft.deadline()).isNull();
+        assertThat(draft.warnings()).contains(GoalDraftWarnings.DEADLINE_INVALID);
+    }
+
+    // 상한은 한 달 뒤 같은 날(2026-12-05). 해석은 되지만 너무 먼 기한은 "최대 한 달" 경고로 비운다.
+    @ParameterizedTest
+    @ValueSource(strings = {"연말까지", "올해 안에", "다음 달까지", "12월 말까지", "1/10까지", "석 달 동안", "5주 안에", "12월 6일까지"})
+    void 한_달보다_먼_기한은_비우고_상한_경고를_붙인다(String phrase) {
+        GoalDraft draft = parser.parse("뉴발 990 270 15만원 이하 " + phrase);
+
+        assertThat(draft.deadline()).isNull();
+        assertThat(draft.warnings()).contains(GoalDraftWarnings.DEADLINE_TOO_FAR)
+                .doesNotContain(GoalDraftWarnings.DEADLINE_MISSING);
+        // 상한에 걸려도 기한 표현은 해석한 것이므로 자유 조건에 남지 않는다.
+        assertThat(draft.freeTextConditions()).isNull();
+    }
+
+    @Test
+    void 기한은_다른_필드와_함께_뽑힌다() {
+        GoalDraft draft = parser.parse("조던1 시카고 270 새거급으로 40만원까지 이번 주 안에 구해요");
+
+        assertThat(draft.modelKey()).isEqualTo("jordan1");
+        assertThat(draft.minCondition()).isEqualTo(GoalCondition.DS);
+        assertThat(draft.hardMaxAmount()).isEqualTo(400_000L);
+        assertThat(draft.deadline()).isEqualTo(OffsetDateTime.parse("2026-11-08T23:59:00+09:00"));
+        assertThat(draft.freeTextConditions()).contains("시카고").doesNotContain("이번", "안에");
     }
 }

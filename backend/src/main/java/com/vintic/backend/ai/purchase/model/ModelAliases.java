@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 // 모델 표기(한/영, 띄어쓰기·하이픈 변형)를 시세 CSV의 model_key로 접는다 (#95).
 //
@@ -30,8 +31,13 @@ import java.util.Optional;
 // 매칭 규칙:
 //   - 별칭·입력 모두 소문자 + 영숫자/한글만 남긴다 ("뉴발 990" == "뉴발990" == "뉴발-990").
 //   - 긴 별칭부터 검사한다 ("덩크하이"가 "덩크"에 먹히지 않게).
-//   - 숫자만 있는 모델(530/990/1461...)은 브랜드 표기가 붙은 별칭만 둔다. "990" 단독을 허용하면
-//     가격·사이즈·품번 숫자에 붙는다.
+//   - requires_brand(5열, 선택)가 true인 별칭은 그 브랜드가 텍스트 어딘가에 언급될 때만 인정한다.
+//     "올스타"(컨버스), "530"(뉴발란스)처럼 단독으로는 다른 신발·숫자에 붙는 짧은 표기를 안전하게 쓴다.
+//   - 숫자 경계: 숫자로 끝나는 별칭은 바로 뒤에 숫자·만·천·원이 오면, 숫자로 시작하는 별칭은 바로 앞이
+//     숫자면 인정하지 않는다("990" ≠ "99,000원", "조던6" ≠ "조던 6만원"). 공백을 지우기 전 원문 기준이라
+//     "조던1 270"은 그대로 잡힌다.
+//   - 브랜드 일치: 텍스트에 브랜드가 나오면 그 브랜드의 모델만 고른다("골든구스 슈퍼스타"는 아디다스
+//     슈퍼스타가 아니다, "스케쳐스 아치핏 슬립온"은 반스 슬립온이 아니다).
 @Component
 @Slf4j
 public class ModelAliases {
@@ -51,8 +57,10 @@ public class ModelAliases {
     public record Match(ModelInfo model, String matchedAlias) {
     }
 
-    private record Alias(String raw, String normalized, ModelInfo model) {
+    private record Alias(String raw, String normalized, ModelInfo model, boolean requiresBrand) {
     }
+
+    private static final String UNIT_SUFFIXES = "만천원";
 
     private final List<Alias> aliasesLongestFirst;
     private final Map<String, ModelInfo> byKey;
@@ -78,13 +86,87 @@ public class ModelAliases {
         if (text == null || text.isBlank()) {
             return Optional.empty();
         }
-        String normalized = normalize(text);
+        NormalizedText normalized = NormalizedText.of(text);
+        if (normalized.value().isEmpty()) {
+            return Optional.empty();
+        }
+        Set<String> mentionedBrands = BrandAliases.mentionedBrands(text);
         for (Alias alias : aliasesLongestFirst) {
-            if (normalized.contains(alias.normalized())) {
+            String brand = alias.model().brand();
+            if (alias.requiresBrand() && !mentionedBrands.contains(brand)) {
+                continue;
+            }
+            if (!mentionedBrands.isEmpty() && !mentionedBrands.contains(brand)) {
+                continue;
+            }
+            if (normalized.containsWithDigitBoundary(alias.normalized())) {
                 return Optional.of(new Match(alias.model(), alias.raw()));
             }
         }
         return Optional.empty();
+    }
+
+    // 정규화 문자열과, 각 글자가 원문 어디에 있었는지. 숫자 경계는 공백을 지우기 전 원문으로 판단해야
+    // "조던1 270"(경계 있음)과 "조던 15만원"(경계 없음)을 가를 수 있다.
+    private record NormalizedText(String raw, String value, int[] rawIndex) {
+
+        static NormalizedText of(String text) {
+            String raw = text.toLowerCase(Locale.ROOT);
+            StringBuilder value = new StringBuilder();
+            int[] index = new int[raw.length()];
+            for (int i = 0; i < raw.length(); i++) {
+                char c = raw.charAt(i);
+                if (isKept(c)) {
+                    index[value.length()] = i;
+                    value.append(c);
+                }
+            }
+            return new NormalizedText(raw, value.toString(), index);
+        }
+
+        boolean containsWithDigitBoundary(String alias) {
+            int start = value.indexOf(alias);
+            while (start >= 0) {
+                if (digitBoundaryOk(alias, start, start + alias.length())) {
+                    return true;
+                }
+                start = value.indexOf(alias, start + 1);
+            }
+            return false;
+        }
+
+        private boolean digitBoundaryOk(String alias, int start, int end) {
+            if (Character.isDigit(alias.charAt(alias.length() - 1))) {
+                int next = rawIndex[end - 1] + 1;
+                if (next < raw.length()) {
+                    char c = raw.charAt(next);
+                    if (Character.isDigit(c) || UNIT_SUFFIXES.indexOf(c) >= 0) {
+                        return false;
+                    }
+                    // "99,000"·"1.5" - 구분자 너머가 숫자면 같은 숫자의 일부다
+                    if ((c == ',' || c == '.') && next + 1 < raw.length() && Character.isDigit(raw.charAt(next + 1))) {
+                        return false;
+                    }
+                }
+            }
+            if (Character.isDigit(alias.charAt(0))) {
+                int prev = rawIndex[start] - 1;
+                if (prev >= 0) {
+                    char c = raw.charAt(prev);
+                    if (Character.isDigit(c)) {
+                        return false;
+                    }
+                    if ((c == ',' || c == '.') && prev - 1 >= 0 && Character.isDigit(raw.charAt(prev - 1))) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
+        private static boolean isKept(char c) {
+            return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || (c >= '가' && c <= '힣');
+        }
     }
 
     public Optional<ModelInfo> byKey(String modelKey) {
@@ -144,7 +226,12 @@ public class ModelAliases {
                     throw new IllegalStateException("정규화하면 비는 별칭: " + line);
                 }
                 ModelInfo model = new ModelInfo(columns[1].trim(), columns[2].trim().toLowerCase(Locale.ROOT), columns[3].trim());
-                aliases.add(new Alias(raw, normalized, model));
+                boolean requiresBrand = columns.length > 4 && Boolean.parseBoolean(columns[4].trim());
+                if (requiresBrand && !BrandAliases.isKnownBrand(model.brand())) {
+                    // 브랜드 별칭 표가 모르는 브랜드면 언급을 확인할 방법이 없어 이 별칭은 영영 안 잡힌다
+                    throw new IllegalStateException("requires_brand인데 브랜드 별칭 표에 없는 브랜드: " + line);
+                }
+                aliases.add(new Alias(raw, normalized, model, requiresBrand));
             }
         } catch (IOException e) {
             throw new IllegalStateException("모델 별칭 표를 읽지 못했습니다: " + CSV_PATH, e);

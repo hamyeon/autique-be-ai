@@ -42,8 +42,13 @@ final class ListingSignals {
     private static final Pattern BUNDLE = Pattern.compile("일괄|묶음\\s*판매|(^|\\s)1\\.\\s*\\S.*\\s2\\.\\s*\\S");
 
     // 원래 슬리퍼·샌들·클로그·부츠인 모델. 이 Goal에는 SANDAL_LIKE 표식이 부정 신호가 아니다.
-    private static final Set<String> SANDAL_LIKE_MODELS =
-            Set.of("tasman", "airmaxkoko", "boston", "classicclog", "hunteroriginal", "rockfishrain");
+    // 4차 카탈로그 확대로 들어온 슬리퍼·샌들·클로그 모델도 여기 있어야 한다 - 빠지면 그 모델 Goal은
+    // 제목에 "슬리퍼"가 붙은 매물(= 사실상 전부)을 전부 탈락시킨다.
+    private static final Set<String> SANDAL_LIKE_MODELS = Set.of(
+            "tasman", "airmaxkoko", "boston", "classicclog", "hunteroriginal", "rockfishrain",
+            "adilette", "airrift", "literide", "crush", "bayaband", "echoclog",
+            "disquette", "coquette", "tazz", "goldenglow", "newport", "uneek", "lulu", "hopara",
+            "dmclarissa", "dmgryphon", "dmblaire", "uggultramini");
 
     private ListingSignals() {
     }

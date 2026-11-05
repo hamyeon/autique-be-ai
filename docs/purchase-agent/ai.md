@@ -20,6 +20,7 @@ AI 담당은 셋이다. (1) 자연어 → Goal 초안 파싱, (2) 매물 적합�
 | 2026-09-10 | 매물 적합도 Matcher(규칙 기반 + OpenAI) · 실제 당근 매물 59케이스 하네스 · 규칙 97%, 거짓 양성 0 |
 | 2026-09-10 | AI 시세 provider. `Product.recommendedPrice`가 클라이언트 값임을 확인 - Agent 시세는 ENGAGE 직전 서버 재계산으로 결정 |
 | 2026-10-15 | 전체 동작 흐름 순서도 추가(README에서 옮김). README에는 목표 등록·탐색 입찰 두 줄 요약만 남겼다 |
+| 2026-11-05 | 별칭 표 감사·규칙 보강(§1-2). 크롤링 매물 제목 9,181건 재현율 96.1% → 98.2%(남은 차이는 대부분 크롤러 라벨 쪽 오류). "컨버스 올스타"·"Converse All Star" 매물이 후보에서 빠지던 것, Vision의 척70 표기가 척테일러로 가던 것, 골든구스 슈퍼스타가 아디다스로 가던 것 교정. 슬리퍼·샌들형 신규 모델을 Matcher 예외 목록에 추가. 별칭 회귀 셋 488케이스(`model-alias-fixtures.json`) |
 
 ## 전체 동작 흐름
 
@@ -55,7 +56,7 @@ POST /api/purchase-goals/parse  { "text": "뉴발 990, A급 이상, 15만원 이
         │
         ▼
 GoalParser (인터페이스, 설계안 6-4)
-  ├ OpenAiGoalParser   시스템 프롬프트에 시세 카탈로그(65개 모델·별칭, #97 이후)를 실어 Structured Outputs로 받음
+  ├ OpenAiGoalParser   시스템 프롬프트에 시세 카탈로그(133개 모델·별칭, 4차 확대 이후)를 실어 Structured Outputs로 받음
   │     └ GoalDraftValidator   카탈로그 밖 키·비정상 금액·사이즈를 걷어내고 warnings 부착
   ├ RuleBasedGoalParser 별칭 표 + 정규식. API 없음. 결정적
   └ FallbackGoalParser  OpenAI 실패 시 규칙 기반으로 대체 (경고 + confidence ≤ 0.5)
@@ -76,7 +77,7 @@ OpenAI 크레딧이 없으면 모든 후보가 제외된다 - 그때는 `rule`(�
 
 ### 1-1. GoalDraft 필드
 
-설계안 6-1 계약 필드 다섯 개에 네 개를 **추가**했다(전부 nullable, 기존 필드 의미는 그대로).
+설계안 6-1 계약 필드 다섯 개에 다섯 개를 **추가**했다(전부 nullable, 기존 필드 의미는 그대로).
 
 | 필드 | 출처 | 왜 추가했나 |
 | --- | --- | --- |
@@ -84,6 +85,7 @@ OpenAI 크레딧이 없으면 모든 후보가 제외된다 - 그때는 `rule`(�
 | `brand` | 추가 | 모델을 못 특정해도 브랜드로 pre-filter가 가능하게 |
 | `modelKey` | 추가 | 시세 CSV의 `model_key`. pre-filter·시세 조회·Matcher가 문자열 비교 대신 이 키로 만난다. null이면 시세 카탈로그 밖 모델이라 v1 Agent는 후보를 못 찾는다 |
 | `sizeKr` | 추가 | **계약에 사이즈 칸이 없었다.** 신발은 사이즈 없이 살 수 없는데 자유 조건(soft)에 섞이면 다른 사이즈를 사게 된다. 백엔드 pre-filter가 hard 조건으로 써야 한다 - #109에서 hard 조건으로 반영 |
+| `deadline` | 추가 (2026-11-05) | 등록 API(`CreatePurchaseGoalRequest.deadline`)는 필수로 받는데 초안에 칸이 없어 "일주일 안에" 같은 기한이 버려졌다. 같은 이름·타입(ISO-8601 오프셋)으로 두어 그대로 옮길 수 있다. 파서는 날짜만 내고 시각은 그날 23:59(서울)로 서버가 채운다. 기한이 없으면 null - 서버가 기본값을 지어내지 않고, 프론트가 확인 화면에서 다시 묻는다 |
 | `warnings` | 추가 | 확인 화면 안내. "사이즈 없음", "'박스 필수'는 v1에서 참고 사항", "AI 실패 → 규칙 기반 초안" |
 
 `minCondition`은 DS/S/A/B/C 5단계(`GoalCondition`)다. Vision의 `ConditionGrade`에는 S가 없지만
@@ -99,9 +101,22 @@ OpenAI 크레딧이 없으면 모든 후보가 제외된다 - 그때는 `rule`(�
 파서가 고른 키로 바로 시세를 찾을 수 있어야 하기 때문이다(`ModelAliasesTest`가 두 CSV의 키
 집합이 같은지 검사한다).
 
-매칭 규칙은 크롤러의 `model_aliases.py`와 같다. 소문자 + 영숫자/한글만 남긴 뒤 긴 별칭부터
-포함 검사한다("덩크하이"가 "덩크"에 먹히지 않게). 숫자만 있는 모델(530/990/1461)은 브랜드
-표기가 붙은 별칭만 둔다 - 가격·사이즈·품번 숫자에 붙는 오탐 방지.
+매칭 규칙: 소문자 + 영숫자/한글만 남긴 뒤 긴 별칭부터 포함 검사한다("덩크하이"가 "덩크"에
+먹히지 않게). 여기에 세 규칙이 붙는다(2026-11-05).
+
+| 규칙 | 내용 | 막는 것 / 살리는 것 |
+| --- | --- | --- |
+| `requires_brand` (5열) | 그 브랜드가 텍스트 어딘가에 언급될 때만 인정 | "올스타"(컨버스), "530"(뉴발란스), "에이스"(구찌)처럼 단독으론 위험한 표기를 쓸 수 있게 함. "뉴발란스 MR530", "프레쉬폼 1080", "핏플랍 ... 루루"처럼 브랜드와 모델 사이에 다른 말이 낀 표기를 잡는다 |
+| 숫자 경계 | 숫자로 끝나는 별칭은 바로 뒤가 숫자·만·천·원이면, 숫자로 시작하는 별칭은 바로 앞이 숫자면 불인정. 공백 제거 전 원문 기준 | "990" ≠ "99,000원", "조던6" ≠ "조던 6만원", "에어맥스1" ≠ "에어맥스 15만원". "조던1 270"은 그대로 잡힌다 |
+| 브랜드 일치 | 텍스트에 브랜드가 나오면 그 브랜드의 모델만 고른다 | "골든구스 슈퍼스타" → 골든구스, "스케쳐스 아치핏 슬립온" → 아치핏, "나이키 올드스쿨 시계" → 없음 |
+
+"올스타" 단독은 NBA 올스타·조던 All-Star 에디션에도 붙어 컨버스 언급을 요구한다. 그래서 브랜드
+없이 "올스타 사고 싶어"만 쓴 입력은 규칙 파서가 못 잡는다(LLM 파서는 카탈로그를 보고 고른다).
+
+**회귀 셋** `src/test/resources/purchase/model-alias-fixtures.json` (`ModelAliasFixturesTest`, 전부
+정답이어야 통과): Vision 정식 영문 표기(카탈로그 133개 모델 전부), 실제 크롤링 매물 제목(모델당 2건),
+감사에서 틀리던 표기, 잡히면 안 되는 표기. 카탈로그에 모델을 넣으면 Vision 표기 케이스도 같이
+넣어야 테스트가 통과한다. 별칭을 고칠 때 다른 모델이 깨지는지가 여기서 바로 보인다.
 
 이 표는 파서만이 아니라 (2) Matcher의 규칙 기반 구현과 백엔드 pre-filter가 같이 쓴다.
 
@@ -117,11 +132,15 @@ Structured Outputs는 형태만 보장한다. 값은 서버가 본다.
 | `sizeKr` 200~330 밖 | null |
 | `minCondition` 미지 표기 | null |
 | `confidence` 0~1 밖 | 잘라냄 |
+| `deadlineDate`가 `YYYY-MM-DD` 아님 / 오늘 이전 | null + "해석 실패" 경고. 기준일은 LLM에게 보낸 날짜와 같은 값을 쓴다 |
+| `deadlineDate`가 한 달 뒤 같은 날(11/5 → 12/5) 초과 | null + "최대 한 달" 경고. 상한은 파싱 초안에만 적용 - 등록 API는 "현재 이후"만 검사한다. LLM에게는 범위를 자르지 말고 의도한 날짜를 그대로 쓰게 하고 서버가 판단한다 |
 
 ### 1-4. 관측성
 
 `AiCallType.CHAT`을 추가했다(VISION/EMBEDDING과 비용 단가가 달라 분리). 파싱 호출은
-stage=`goal-parse`, promptVersion=`v1`로 `AiCallLog`에 남는다. Vision 클라이언트를 재사용하므로
+stage=`goal-parse`, promptVersion=`v2`로 `AiCallLog`에 남는다(2026-11-05 v1 → v2: `deadlineDate` 필드 추가).
+상대 기한을 계산하려면 오늘 날짜가 필요한데 시스템 프롬프트는 기동 시 한 번만 만들기 때문에, 날짜는 매 요청 user 메시지
+앞줄(`오늘: 2026-11-05 (목)` / `구매 목표: ...`)에 싣는다. Vision 클라이언트를 재사용하므로
 429 재시도·토큰 집계는 그대로 적용된다.
 
 ### 1-5. 벤더 교체 가능성
@@ -192,13 +211,13 @@ PriceEstimateProvider.estimate(PriceEstimateQuery.of(product)) → Optional<Pric
 
 ### 2-1. 하네스
 
-`src/test/resources/purchase/goal-parse-fixtures.json` - 50케이스. 사용자 표현을 흉내 낸 문장에
-기대값을 사람이 라벨링했다. brand/modelKey/minCondition/hardMaxAmount/sizeKr 5필드는 정확
-일치(null도 값), 자유 조건은 키워드 재현율로 잰다. 모델 혼동(990/993, 덩크로우/덩크하이),
+`src/test/resources/purchase/goal-parse-fixtures.json` - 67케이스(11/5 기한 케이스 12건·별칭 케이스 5건 추가, 기준일 `today` 2026-11-05).
+사용자 표현을 흉내 낸 문장에 기대값을 사람이 라벨링했다. brand/modelKey/minCondition/hardMaxAmount/sizeKr/deadline 6필드는 정확
+일치(null도 값 - 기한을 적지 않은 기존 50건은 deadline null이 정답), 자유 조건은 키워드 재현율로 잰다. 파서의 Clock은 기준일 정오(서울)로 고정한다. 모델 혼동(990/993, 덩크로우/덩크하이),
 최소/최대 금액, 만원대, 사이즈와 품번 숫자 혼동, 카탈로그 밖 모델, 브랜드만 있는 경우를
 고르게 넣었다.
 
-- 규칙 기반: `RuleBasedGoalParserHarnessTest` - 매 빌드에서 돌고 `build/goal-parse-harness/rule.txt`에 남긴다. 기준선 회귀 하한(modelKey·금액 85%, 5필드 60%)을 어기면 실패한다.
+- 규칙 기반: `RuleBasedGoalParserHarnessTest` - 매 빌드에서 돌고 `build/goal-parse-harness/rule.txt`에 남긴다. 기준선 회귀 하한(modelKey·금액 85%, 전 필드 60%)을 어기면 실패한다. 11/5 측정: 67/67(기한 67/67, 기존 50건에서 기한 오탐 0).
 - OpenAI: `GoalParsePromptHarnessTest` - `OPENAI_API_KEY` + `-Dgoal.harness=true`일 때만. `build/goal-parse-harness/openai-{model}.txt`.
 
 **Matcher**: `src/test/resources/purchase/listing-match-fixtures.json` - 59케이스. listing은 당근
@@ -287,11 +306,11 @@ WR993GL 안의 993. 이 두 종류가 LLM Matcher가 값을 해야 할 자리다
 | --- | --- |
 | `ai/purchase/dto/` | `GoalDraft`, `GoalCondition` |
 | `ai/purchase/model/` | `ModelAliases`, `BrandAliases` |
-| `ai/purchase/parser/` | `GoalParser`, `RuleBasedGoalParser`, `OpenAiGoalParser`, `GoalDraftValidator`, `FallbackGoalParser`, `GoalParserConfig`, `GoalParserProperties` |
+| `ai/purchase/parser/` | `GoalParser`, `RuleBasedGoalParser`, `OpenAiGoalParser`, `GoalDraftValidator`, `FallbackGoalParser`, `GoalParserConfig`, `GoalParserProperties`, `DeadlineExtractor`(규칙 기한 추출), `GoalDeadlines`(날짜 → 23:59 서울·범위 검사) |
 | `ai/purchase/api/` | `GoalParseController`, `GoalParseRequest` |
 | `ai/purchase/price/` | `PriceEstimateProvider`, `PriceEstimate`, `PriceEstimateQuery`, `PricingServiceEstimateProvider` |
 | `ai/purchase/match/` | `ListingMatcher`, `MatchGoal`, `AuctionListing`, `MatchResult`, `RuleBasedListingMatcher`, `OpenAiListingMatcher`, `MatchResultValidator`, `ListingSignals`, `ListingMatcherConfig`, `ListingMatcherProperties` |
 | `ai/vision/client/ChatCompletionClient` | 텍스트/이미지 Structured Outputs 호출 인터페이스 |
-| `resources/prompts/purchase/{goal-parse,listing-match}-v1.{md,schema.json}` | 프롬프트·응답 스키마 |
+| `resources/prompts/purchase/goal-parse-v2.{md,schema.json}`, `listing-match-v1.{md,schema.json}` | 프롬프트·응답 스키마 (`goal-parse-v1`은 이력용으로 남김) |
 | `resources/data/model_aliases.csv` | 모델 별칭 표 |
 | `test/.../ai/purchase/harness/` | 픽스처 로더·채점·리포트·하네스 테스트 |

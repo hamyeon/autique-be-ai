@@ -190,6 +190,51 @@ class PriceCalculationServiceTest {
         verify(marketPriceDataLoader).loadKreamRows();
     }
 
+    private UsedMarketPriceProvider.BrandPrice converseBrandMarket() {
+        return new UsedMarketPriceProvider.BrandPrice("Converse", "converse", 835, 25_000, 15_000, 40_000);
+    }
+
+    @Test
+    void 모델_시세도_KREAM도_없으면_브랜드_전체_시세로_추정한다() {
+        // Vision이 브랜드만 읽었거나("컨버스 하이") 카탈로그 밖 모델이면 "없음" 대신 브랜드 시세
+        when(marketPriceDataLoader.loadKreamRows()).thenReturn(List.of());
+        when(marketPriceDataLoader.loadEbayRows()).thenReturn(List.of());
+        when(usedMarketPriceProvider.findBrand("Converse")).thenReturn(Optional.of(converseBrandMarket()));
+
+        CalculatePriceResponse response = newService().calculate(request("Converse", "하이탑", "UNKNOWN"));
+
+        assertThat(response.recommendedPrice()).isEqualTo(25_000);
+        assertThat(response.minRecommendedPrice()).isEqualTo(15_000);
+        assertThat(response.maxRecommendedPrice()).isEqualTo(40_000);
+        assertThat(response.kreamAveragePrice()).isZero();
+        // 정확도가 낮다는 것을 숨기지 않는다
+        assertThat(response.reason()).contains("브랜드 전체 중고 매물 835건", "참고용 추정치");
+    }
+
+    @Test
+    void 브랜드_시세에도_상태_비율을_반영한다() {
+        when(marketPriceDataLoader.loadKreamRows()).thenReturn(List.of());
+        when(marketPriceDataLoader.loadEbayRows()).thenReturn(List.of());
+        when(usedMarketPriceProvider.findBrand("Converse")).thenReturn(Optional.of(converseBrandMarket()));
+
+        int ds = newService().calculate(request("Converse", "하이탑", "DS")).recommendedPrice();
+        int b = newService().calculate(request("Converse", "하이탑", "B")).recommendedPrice();
+
+        assertThat(ds).isGreaterThan(b);
+    }
+
+    @Test
+    void KREAM_시세가_있으면_브랜드_시세보다_KREAM이_먼저다() {
+        // 브랜드 시세는 마지막 폴백이다 - 모델 단위 근거(KREAM)가 있으면 쓰지 않는다
+        when(marketPriceDataLoader.loadKreamRows()).thenReturn(List.of(row("KREAM", 100_000)));
+        when(marketPriceDataLoader.loadEbayRows()).thenReturn(List.of());
+
+        CalculatePriceResponse response = newService().calculate(request("Nike", "없는모델", "DS"));
+
+        assertThat(response.kreamAveragePrice()).isEqualTo(100_000);
+        verify(usedMarketPriceProvider, never()).findBrand(anyString());
+    }
+
     private MarketPriceDataLoader.MarketPriceRow row(String source, int price) {
         return new MarketPriceDataLoader.MarketPriceRow(
                 source, "Nike", "없는모델", "Panda", 270, "DS", true, price, "https://example.com");

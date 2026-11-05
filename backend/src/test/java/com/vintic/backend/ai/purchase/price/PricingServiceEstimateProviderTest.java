@@ -65,6 +65,15 @@ class PricingServiceEstimateProviderTest {
     }
 
     @Test
+    void 브랜드_전체_시세_추정은_Agent에_넘기지_않는다() {
+        // KREAM도 모델 시세도 아닌데 값이 온 경우 = 브랜드 단위 추정(3순위).
+        // 다른 모델 가격이 섞여 있어 "목표가 대비 싸다" 판정의 근거가 될 수 없다.
+        when(pricingService.calculate(any())).thenReturn(result(25_000, 25_000, 0, 15_000, 40_000));
+
+        assertThat(provider.estimate(query("Converse", "하이탑", "A"))).isEmpty();
+    }
+
+    @Test
     void 별칭_표가_아는_모델은_카탈로그_표기로_바꿔_묻는다() {
         when(pricingService.calculate(any())).thenReturn(result(90_000, 80_000, 0, 70_000, 110_000));
         ArgumentCaptor<PricingRequest> captor = ArgumentCaptor.forClass(PricingRequest.class);

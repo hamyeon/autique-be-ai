@@ -5,17 +5,22 @@ import com.vintic.backend.ai.purchase.model.ModelAliases;
 import com.vintic.backend.common.exception.AiApiException;
 import org.junit.jupiter.api.Test;
 
+import com.vintic.backend.config.ClockConfig;
+
+import java.time.Clock;
+import java.time.Instant;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 class FallbackGoalParserTest {
 
-    private final RuleBasedGoalParser rule = new RuleBasedGoalParser(new ModelAliases());
+    private final RuleBasedGoalParser rule = new RuleBasedGoalParser(new ModelAliases(),
+            Clock.fixed(Instant.parse("2026-11-05T03:00:00Z"), ClockConfig.APP_ZONE));
 
     @Test
     void 일차_파서가_성공하면_그_결과를_그대로_쓴다() {
-        GoalDraft primaryResult = new GoalDraft("New Balance 990", "New Balance", "nb990", null, 150_000L, 270, null, 0.9, List.of());
+        GoalDraft primaryResult = new GoalDraft("New Balance 990", "New Balance", "nb990", null, 150_000L, 270, null, null, 0.9, List.of());
         FallbackGoalParser parser = new FallbackGoalParser(text -> primaryResult, rule);
 
         assertThat(parser.parse("뉴발 990")).isSameAs(primaryResult);
