@@ -35,6 +35,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DataJpaTest
 @Import({
         PurchaseGoalCandidateRanker.class,
+        PurchaseGoalCapPolicy.class,
         TestClockConfig.class,
         PurchaseGoalCandidateRankerTest.FakeListingMatcherConfig.class
 })
@@ -245,6 +246,37 @@ class PurchaseGoalCandidateRankerTest {
 
         List<PurchaseGoalCandidate> candidates = List.of(new PurchaseGoalCandidate(reload(auction), estimate(300000)));
         Optional<PurchaseGoalRankedCandidate> result = ranker.rankTopCandidate(reload(goal), candidates);
+
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    void 시세보다_비싸도_시세의_2배_안이면_참여_후보로_남는다() {
+        // 시세 20,000 / 다음 입찰가 30,000(현재가 25,000 + 5,000). 상한 = min(예산 100,000, 20,000 × 2) = 40,000
+        User seller = persistUser("seller-ratio1@vintic.local");
+        User buyer = persistUser("buyer-ratio1@vintic.local");
+        Auction auction = persistAuction(persistProduct(seller), 25000L, 5000L, FIXED_NOW.minusHours(1), FIXED_NOW.plusHours(1));
+        PurchaseGoal goal = persistGoal(buyer, 100000L);
+        flushAndClear();
+
+        Optional<PurchaseGoalRankedCandidate> result = ranker.rankTopCandidate(
+                reload(goal), List.of(new PurchaseGoalCandidate(reload(auction), estimate(20000))));
+
+        assertThat(result).isPresent();
+        assertThat(result.get().cap()).isEqualTo(40000L);
+    }
+
+    @Test
+    void 다음_입찰가가_시세의_2배를_넘으면_예산이_넉넉해도_제외한다() {
+        // 시세 12,000 × 2 = 24,000 < 다음 입찰가 30,000
+        User seller = persistUser("seller-ratio2@vintic.local");
+        User buyer = persistUser("buyer-ratio2@vintic.local");
+        Auction auction = persistAuction(persistProduct(seller), 25000L, 5000L, FIXED_NOW.minusHours(1), FIXED_NOW.plusHours(1));
+        PurchaseGoal goal = persistGoal(buyer, 100000L);
+        flushAndClear();
+
+        Optional<PurchaseGoalRankedCandidate> result = ranker.rankTopCandidate(
+                reload(goal), List.of(new PurchaseGoalCandidate(reload(auction), estimate(12000))));
 
         assertThat(result).isEmpty();
     }

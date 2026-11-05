@@ -50,6 +50,12 @@ public class PurchaseGoalEngagementTransactionService {
 
     @Transactional
     public PurchaseGoalEngagementResult engage(Long goalId, Long auctionId, Long userId, long cap) {
+        return engage(goalId, auctionId, userId, cap, null);
+    }
+
+    // priceNote: 참여 알림에 덧붙일 시세 비교 문장(PriceRatio.engagementNote). null이면 기본 문구만 보낸다.
+    @Transactional
+    public PurchaseGoalEngagementResult engage(Long goalId, Long auctionId, Long userId, long cap, String priceNote) {
         LocalDateTime now = LocalDateTime.now(clock);
         int updated = purchaseGoalRepository.transitionToEngaged(goalId, auctionId, now);
         if (updated != 1) {
@@ -63,7 +69,7 @@ public class PurchaseGoalEngagementTransactionService {
         // affected=1이었던 이 시도 자체가 재실행되지 않으므로 중복 알림 경로가 없다.
         AutoBidRegisterResponse response = autoBidCommandService.createAutoBid(auctionId, userId, cap, null, goalId);
         User user = userRepository.getReferenceById(userId);
-        notificationRecorder.recordPurchaseAgentEngaged(user, goalId, auctionId);
+        notificationRecorder.recordPurchaseAgentEngaged(user, goalId, auctionId, priceNote);
 
         return PurchaseGoalEngagementResult.engaged(auctionId, response.autoBidSettingId());
     }

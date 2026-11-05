@@ -25,23 +25,24 @@ import java.util.Optional;
 @Slf4j
 public class PurchaseGoalEngagementService {
 
-    // Day 4와 동일한 초기값. Product.recommendedPrice(판매자 입력값)는 쓰지 않는다.
-    private static final double CAP_RATIO = 1.0;
-
     private final PriceEstimateProvider priceEstimateProvider;
     private final PurchaseGoalEngagementTransactionService engagementTransactionService;
+    private final PurchaseGoalCapPolicy capPolicy;
 
     public PurchaseGoalEngagementService(
             PriceEstimateProvider priceEstimateProvider,
-            PurchaseGoalEngagementTransactionService engagementTransactionService
+            PurchaseGoalEngagementTransactionService engagementTransactionService,
+            PurchaseGoalCapPolicy capPolicy
     ) {
         this.priceEstimateProvider = priceEstimateProvider;
         this.engagementTransactionService = engagementTransactionService;
+        this.capPolicy = capPolicy;
     }
 
     // topCandidate가 비어 있으면(Day 4가 후보를 못 찾음) 아무 상태도 바꾸지 않는다.
     public PurchaseGoalEngagementResult attemptEngage(PurchaseGoal goal, Optional<PurchaseGoalRankedCandidate> topCandidate) {
         if (topCandidate.isEmpty()) {
+            log.info("Purchase Agent 참여 안 함 - goalId={}, 사유=참여할 후보 없음", goal.getId());
             return PurchaseGoalEngagementResult.notEngaged("Day 4 후보 없음");
         }
 
@@ -55,13 +56,35 @@ public class PurchaseGoalEngagementService {
             return PurchaseGoalEngagementResult.notEngaged("시세 재확인 실패");
         }
         if (freshEstimate.isEmpty() || freshEstimate.get().estimatedPrice() <= 0) {
+            log.info("Purchase Agent 참여 안 함 - goalId={}, auctionId={}, 사유=참여 직전 서버 시세 없음", goal.getId(), auction.getId());
             return PurchaseGoalEngagementResult.notEngaged("서버 시세 없음");
         }
 
-        long cap = Math.min(goal.getHardMaxAmount(), (long) Math.floor(freshEstimate.get().estimatedPrice() * CAP_RATIO));
+        int estimatedPrice = freshEstimate.get().estimatedPrice();
+        long cap = capPolicy.cap(goal.getHardMaxAmount(), estimatedPrice);
+        long minNextBid = auction.getMinNextBidAmount();
+        String priceSummary = "예산=%d, 시세=%d, 상한=%d(시세 × %s), 최소 입찰가=%d(시세의 %s배)".formatted(
+                goal.getHardMaxAmount(), estimatedPrice, cap, capPolicy.capRatio(),
+                minNextBid, PriceRatio.format(minNextBid, estimatedPrice));
+        // 재확인한 시세로 다시 계산한 상한이 모자라면 AutoBid 등록이 어차피 CapTooLow로 실패한다 -
+        // 트랜잭션을 열기 전에 이유를 분명히 남기고 끝낸다(동작은 같다).
+        if (cap < minNextBid) {
+            log.info("Purchase Agent 참여 안 함 - goalId={}, auctionId={}, 사유=재확인한 상한 < 최소 입찰가, {}",
+                    goal.getId(), auction.getId(), priceSummary);
+            return PurchaseGoalEngagementResult.notEngaged("상한이 최소 입찰가보다 낮음");
+        }
 
         try {
-            return engagementTransactionService.engage(goal.getId(), auction.getId(), goal.getUser().getId(), cap);
+            PurchaseGoalEngagementResult result = engagementTransactionService.engage(
+                    goal.getId(), auction.getId(), goal.getUser().getId(), cap,
+                    PriceRatio.engagementNote(minNextBid, estimatedPrice, cap));
+            if (result.engaged()) {
+                log.info("Purchase Agent 참여 - goalId={}, auctionId={}, autoBidSettingId={}, {}",
+                        goal.getId(), auction.getId(), result.autoBidSettingId(), priceSummary);
+            } else {
+                log.info("Purchase Agent 참여 안 함 - goalId={}, auctionId={}, 사유={}", goal.getId(), auction.getId(), result.reason());
+            }
+            return result;
         } catch (RuntimeException e) {
             log.info("Purchase Agent 참여 실패 - goalId: {}, auctionId: {}, cause: {}", goal.getId(), auction.getId(), e.toString());
             return PurchaseGoalEngagementResult.notEngaged(e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName());

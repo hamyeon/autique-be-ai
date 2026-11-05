@@ -195,7 +195,7 @@ PriceEstimateProvider.estimate(PriceEstimateQuery.of(product)) → Optional<Pric
 `aiEstimatedPrice`가 읽는 `Product.recommendedPrice`는 `ProductRegistrationService`가
 `CreateProductRequest.recommendedPrice()`를 그대로 저장한 값이다 - **클라이언트가 보낸 숫자**다.
 판매자 앱이 추천가를 받아 다시 서버에 보내는 구조라 판매자가 부풀릴 수 있다. Agent의 cap이
-`min(hardMaxAmount, aiEstimatedPrice × CAP_RATIO)`이므로, 그 값을 믿으면 판매자가 구매자 Agent의
+`min(hardMaxAmount, aiEstimatedPrice × cap-ratio)`이므로, 그 값을 믿으면 판매자가 구매자 Agent의
 입찰 상한을 예산 끝까지 끌어올리는 경로가 생긴다. 서버가 계산한 값만 써야 한다.
 
 - 시세 없음(3순위)은 `Optional.empty()` - 설계안대로 후보 제외.
