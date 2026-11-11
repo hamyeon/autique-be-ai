@@ -169,7 +169,7 @@ class AiTrackE2EMySqlIT {
     }
 
     // 경매 시작/종료 시각은 AuctionSchedulePolicy.validate()가 강제한다: 시작은 현재 이후,
-    // 진행시간은 최소 1시간(MIN_DURATION) - 완화하지 않고 그 정책을 그대로 만족시키는 값을 만든다.
+    // 진행시간은 최소 2분(MIN_DURATION) - 완화하지 않고 그 정책을 그대로 만족시키는 값을 만든다.
     private String productJson(String brand, String model, String color, Long analysisId) {
         OffsetDateTime startAt = OffsetDateTime.now().plusMinutes(10);
         OffsetDateTime endAt = startAt.plusHours(2);

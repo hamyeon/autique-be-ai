@@ -439,7 +439,7 @@ public class GlobalExceptionHandler {
                 .body(ApiResponse.fail(40307, e.getMessage()));
     }
 
-    // 경매 등록 요청의 시작/종료 시각이 정책(미래 시각, 최소 진행시간 1시간)을 위반 (400 Bad Request)
+    // 경매 등록 요청의 시작/종료 시각이 정책(미래 시각, 최소 진행시간 2분)을 위반 (400 Bad Request)
     @ExceptionHandler(InvalidAuctionTimeException.class)
     public ResponseEntity<ApiResponse<Void>> handleInvalidAuctionTimeException(InvalidAuctionTimeException e) {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)

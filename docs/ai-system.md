@@ -446,7 +446,7 @@ AI 트랙이 부품 세 개를 만들었고(9/10), 백엔드 워크플로(jchaey
 ```
 문장 ─ Goal 파서 ─► 초안 ─ 사용자 확인 ─► Goal 등록
                                              │
-5분마다 (PurchaseGoalScanScheduler: 만료 → 결과 관찰 → 탐색·참여)
+30초마다 (PurchaseGoalScanScheduler: 만료 → 결과 관찰 → 탐색·참여, 전용 스레드)
   pre-filter  모델 키(별칭 표)·최소 등급(GoalCondition)·사이즈 hard 조건·예산     ← PurchaseGoalCandidateFinder
   랭킹        Matcher 판정 + 서버 시세 대비 할인율 (판매자 추천가는 안 씀)       ← PurchaseGoalCandidateRanker
   참여        입찰 직전 서버 시세 재계산 → 상한 = min(예산, 시세 × 비율)        ← PurchaseGoalEngagementService

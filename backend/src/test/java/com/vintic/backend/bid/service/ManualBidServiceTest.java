@@ -207,7 +207,7 @@ class ManualBidServiceTest {
         manualBidService.placeBid(auction.getId(), otherBidder.getId(), 20000L, "other-key");
         flushAndClear();
         Auction beforeExtend = auctionRepository.findById(auction.getId()).orElseThrow();
-        beforeExtend.maybeExtend(beforeExtend.getEndAt().minusSeconds(30));
+        beforeExtend.maybeExtend(beforeExtend.getEndAt().minusSeconds(5));
         flushAndClear();
         Auction changed = auctionRepository.findById(auction.getId()).orElseThrow();
         assertThat(changed.getCurrentPrice()).isNotEqualTo(first.currentPrice());

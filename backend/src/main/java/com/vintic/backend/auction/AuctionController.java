@@ -316,8 +316,8 @@ public class AuctionController {
             summary = "자동입찰 등록",
             description = "LIVE 중 등록이면 ProxyPriceEngine의 실제 가격 경쟁 결과에 따라 bidOccurred/"
                     + "resultingBidAmount/isHighestBidder가 채워진다(SCHEDULED 등록은 가격에 영향이 없어 "
-                    + "항상 false/null/false). 종료 1분 이내에 entrant 자신의 AUTO Bid가 실제 발생하면(bidOccurred=true) "
-                    + "종료 시각이 3분 연장된다(최대 3회). 동일 Idempotency-Key로 재시도해도 새로 생성되지 않고 "
+                    + "항상 false/null/false). 마감 전 종료 10초 이내에 entrant 자신의 AUTO Bid가 실제 발생하면(bidOccurred=true) "
+                    + "종료 시각이 20초 연장된다(최대 1회). 동일 Idempotency-Key로 재시도해도 새로 생성되지 않고 "
                     + "최초 성공 결과가 반환된다."
     )
     @ApiResponses({
@@ -360,7 +360,7 @@ public class AuctionController {
             description = "LIVE 중 수정이면 ProxyPriceEngine의 실제 가격 경쟁 결과에 따라 bidOccurred/"
                     + "resultingBidAmount/isHighestBidder가 채워진다. CAP_REACHED는 cap을 올려서 실제로 경쟁에서 "
                     + "이겨야만(bidOccurred=true) 이 응답에서 ACTIVE로 복귀한다 - 단순히 cap만 올린다고 복귀하지 않는다. "
-                    + "종료 1분 이내에 bidOccurred=true이면 종료 시각이 3분 연장된다(최대 3회). 동일 Idempotency-Key로 "
+                    + "마감 전 종료 10초 이내에 bidOccurred=true이면 종료 시각이 20초 연장된다(최대 1회). 동일 Idempotency-Key로 "
                     + "재시도해도 다시 처리되지 않고 최초 성공 결과가 반환된다."
     )
     @ApiResponses({
@@ -446,7 +446,7 @@ public class AuctionController {
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "201", description = "등록 성공"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "시작 시각이 과거이거나 진행시간이 1시간 미만(40006)"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "시작 시각이 과거이거나 진행시간이 2분 미만(40006)"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "인증이 필요합니다(40101)"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "본인 상품이 아님(40307)"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "존재하지 않는 이전 경매(40401)"),

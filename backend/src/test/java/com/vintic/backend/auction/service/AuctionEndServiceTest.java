@@ -133,11 +133,11 @@ class AuctionEndServiceTest {
     void 연장으로_늦춰진_최신_endAt_전이면_원래_endAt이_지났어도_LIVE로_유지된다() {
         User seller = persistUser("seller@vintic.local");
         Product product = persistProduct(seller);
-        // 원래 endAt은 이미 지났지만(now - 30초), 연장 트리거 윈도우 안에서 실제로 연장되어
-        // 최신 endAt은 now + 2분 30초(3분 연장 - 30초 경과분)가 된다 - 아직 미래다.
-        LocalDateTime originalEndAt = FIXED_NOW.minusSeconds(30);
+        // 원래 endAt은 이미 지났지만(now - 5초), 연장 트리거 윈도우 안에서 실제로 연장되어
+        // 최신 endAt은 now + 15초(20초 연장 - 5초 경과분)가 된다 - 아직 미래다.
+        LocalDateTime originalEndAt = FIXED_NOW.minusSeconds(5);
         Auction auction = persistLiveAuction(product, FIXED_NOW.minusHours(2), originalEndAt);
-        auction.maybeExtend(originalEndAt.minusSeconds(10));
+        auction.maybeExtend(originalEndAt.minusSeconds(5));
         flushAndClear();
 
         auctionEndService.endIfDue(auction.getId());
@@ -151,12 +151,12 @@ class AuctionEndServiceTest {
     void 연장_이후에도_최신_endAt에_도달하면_ENDED로_전환된다() {
         User seller = persistUser("seller@vintic.local");
         Product product = persistProduct(seller);
-        // 원래 endAt(now-8분)에서 3분 연장돼도 최신 endAt(now-5분)은 여전히 과거다 - 연장된
+        // 원래 endAt(now-8분)에서 20초 연장돼도 최신 endAt(now-7분40초)은 여전히 과거다 - 연장된
         // "최신" 값 기준으로도 종료 대상이어야 한다(연장 이후의 값을 재확인한다는 것 자체를
         // 증명하는 케이스 - 연장을 거치지 않은 endAt_도달 케이스와는 다른 경로).
         LocalDateTime originalEndAt = FIXED_NOW.minusMinutes(8);
         Auction auction = persistLiveAuction(product, FIXED_NOW.minusHours(2), originalEndAt);
-        auction.maybeExtend(originalEndAt.minusSeconds(30));
+        assertThat(auction.maybeExtend(originalEndAt.minusSeconds(5))).isTrue();
         flushAndClear();
 
         auctionEndService.endIfDue(auction.getId());

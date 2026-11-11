@@ -61,6 +61,43 @@
 **켜면 벡터가 없는 상품 수만큼 임베딩을 호출한다(유료).** 이미 만들어진 벡터는 건너뛰므로
 한 번 채운 뒤에는 켜둬도 추가 비용이 없다.
 
+### 도메인 스케줄러 (경매 시작·종료, 구매 에이전트)
+
+| 환경변수 | 기본값 | 설명 |
+| --- | --- | --- |
+| `AUCTION_START_CRON` | `*/10 * * * * *` (10초) | `SCHEDULED → LIVE` 전환 확인 주기 |
+| `AUCTION_END_CRON` | `*/10 * * * * *` (10초) | `LIVE → ENDED` 전환 + 낙찰 주문 생성 확인 주기 |
+| `PURCHASE_AGENT_SCAN_CRON` | `*/30 * * * * *` (30초) | 구매 에이전트 스캔(만료 → 결과 관찰 → 탐색·참여) 주기 |
+| `PURCHASE_AGENT_SCAN_ENABLED` | `false` (모든 프로필) | 구매 에이전트 스캔 on/off |
+
+경매 시작·종료 on/off는 환경변수가 아니라 프로필로 정해진다 - `dev`(따라서 `dev,api`)는
+`application-dev.yml`에서 `true`, `worker`는 `false`로 고정, base는 `false`. 그래서 API EC2에서는
+`AUCTION_START_ENABLED`/`AUCTION_END_ENABLED`를 넣어도 바뀌지 않는다.
+
+**실행 스레드.** `@Scheduled` 작업은 Spring Boot 기본 `taskScheduler`(스레드 1개,
+`spring.task.scheduling.*`)를 함께 쓴다 - 경매 시작·종료, 결제·차순위 만료, PEL 회수, 사진 정리 등.
+구매 에이전트 스캔만 전용 스레드 1개(`purchase-agent-scan-*`, `SchedulingConfig`)에서 돈다. 스캔은
+후보마다 AI(Matcher)를 호출해 오래 걸릴 수 있는데, 같은 스레드를 쓰면 그동안 경매 시작·종료가 멈추기
+때문이다(2026-11 분리).
+
+- 스캔은 겹쳐 실행되지 않는다. 이전 스캔이 끝난 뒤 그다음 cron 시각에 다음 스캔이 돈다.
+- **스캔이 30초보다 오래 걸리면 실제 간격도 그만큼 길어진다.** 지나간 시각은 건너뛰고 밀린 스캔을
+  몰아서 실행하지 않는다.
+- 경매 시작·종료도 같은 기본 스레드를 쓰는 다른 작업이 길어지거나 DB 락을 기다리면 10초보다 늦게 돌 수 있다.
+
+**시연 서버(API EC2)에서 구매 에이전트 켜기** (운영 설정 변경은 사람이 직접 한다)
+
+1. `/opt/autique/api.env`에 `PURCHASE_AGENT_SCAN_ENABLED=true` 추가 후 API 재배포(컨테이너 재생성).
+   Worker(`worker.env`)에는 넣지 않는다 - `worker` 프로필이 `false`로 고정하고, 켜져도 API와 중복 실행된다.
+2. 같이 확인할 값
+   - `api.env`에 `AUCTION_START_CRON`/`AUCTION_END_CRON`/`PURCHASE_AGENT_SCAN_CRON`이 **남아 있지 않은지**
+     (있으면 위 기본값을 덮어쓴다 - 저장소에서는 확인할 수 없는 파일이다).
+   - `OPENAI_API_KEY`가 유효한지. Matcher 기본 provider가 OpenAI(`PURCHASE_LISTING_MATCHER`, 기본 `openai`)라
+     키·크레딧이 없으면 모든 후보가 제외돼 참여하지 않는다(`rule`로 바꾸면 OpenAI 없이 동작).
+   - `PURCHASE_AGENT_CAP_RATIO`(기본 2.0).
+3. 확인: API 로그에 `purchase-agent-scan-1` 스레드의 "Purchase Agent ..." 로그가 30초 간격으로 남는지,
+   경매 시작·종료 로그(`scheduling-1`)가 스캔 중에도 계속 남는지.
+
 ### Vision
 
 | 환경변수 | 기본값 | 설명 |

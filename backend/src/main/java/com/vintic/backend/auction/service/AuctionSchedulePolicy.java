@@ -11,7 +11,7 @@ import java.time.OffsetDateTime;
 // startAt/endAt이 서로 다른 UTC 오프셋으로 와도 실제 경과 시간을 정확히 반영한다.
 public final class AuctionSchedulePolicy {
 
-    public static final Duration MIN_DURATION = Duration.ofHours(1);
+    public static final Duration MIN_DURATION = Duration.ofMinutes(2);
 
     private AuctionSchedulePolicy() {
     }
@@ -22,7 +22,7 @@ public final class AuctionSchedulePolicy {
             throw new InvalidAuctionTimeException("시작 시각은 현재 이후여야 합니다.");
         }
         if (Duration.between(startAt, endAt).compareTo(MIN_DURATION) < 0) {
-            throw new InvalidAuctionTimeException("경매 진행 시간은 최소 1시간이어야 합니다.");
+            throw new InvalidAuctionTimeException("경매 진행 시간은 최소 2분이어야 합니다.");
         }
     }
 }

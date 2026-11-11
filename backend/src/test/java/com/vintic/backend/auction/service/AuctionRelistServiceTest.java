@@ -216,21 +216,38 @@ class AuctionRelistServiceTest {
     }
 
     @Test
-    void 진행시간이_59분59초이면_거절된다() {
+    void 진행시간이_1분59초이면_거절된다() {
         initSut();
         Auction previous = priorAuction(product, 100L, Auction::cancel);
         when(auctionRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(previous));
         when(productRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(product));
 
         OffsetDateTime startAt = NOW_KST.plusHours(1);
-        OffsetDateTime endAt = startAt.plusMinutes(59).plusSeconds(59);
+        OffsetDateTime endAt = startAt.plusMinutes(1).plusSeconds(59);
 
         assertThatThrownBy(() -> sut.relist(100L, 1L, requestWith(startAt, endAt)))
                 .isInstanceOf(InvalidAuctionTimeException.class);
     }
 
     @Test
-    void 진행시간이_정확히_1시간이면_허용된다() {
+    void 진행시간이_정확히_2분이면_허용된다() {
+        initSut();
+        Auction previous = priorAuction(product, 100L, Auction::cancel);
+        when(auctionRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(previous));
+        when(productRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(product));
+        when(auctionRepository.findAllByProductId(10L)).thenReturn(List.of(previous));
+        when(auctionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        OffsetDateTime startAt = NOW_KST.plusHours(1);
+        OffsetDateTime endAt = startAt.plusMinutes(2);
+
+        AuctionRelistResponse response = sut.relist(100L, 1L, requestWith(startAt, endAt));
+
+        assertThat(response.status()).isEqualTo("SCHEDULED");
+    }
+
+    @Test
+    void 진행시간이_1시간인_긴_경매도_허용된다() {
         initSut();
         Auction previous = priorAuction(product, 100L, Auction::cancel);
         when(auctionRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(previous));
@@ -247,14 +264,14 @@ class AuctionRelistServiceTest {
     }
 
     @Test
-    void 서로_다른_UTC_오프셋으로_입력해도_절대_시각_기준으로_1시간_미만이면_거절된다() {
+    void 서로_다른_UTC_오프셋으로_입력해도_절대_시각_기준으로_2분_미만이면_거절된다() {
         initSut();
         Auction previous = priorAuction(product, 100L, Auction::cancel);
         when(auctionRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(previous));
         when(productRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(product));
 
         OffsetDateTime startAt = NOW_KST.plusHours(2).withOffsetSameInstant(ZoneOffset.of("+09:00"));
-        OffsetDateTime endAt = startAt.plusMinutes(59).withOffsetSameInstant(ZoneOffset.UTC);
+        OffsetDateTime endAt = startAt.plusMinutes(1).plusSeconds(59).withOffsetSameInstant(ZoneOffset.UTC);
 
         assertThatThrownBy(() -> sut.relist(100L, 1L, requestWith(startAt, endAt)))
                 .isInstanceOf(InvalidAuctionTimeException.class);

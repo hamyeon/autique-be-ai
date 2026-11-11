@@ -53,12 +53,12 @@ import java.time.LocalDateTime;
 )
 public class Auction {
 
-    // 종료 연장 정책(FINAL contract §0.13/§9): 종료 1분 이내에 성공한 사용자 command로 실제 Bid가
-    // 발생하면 +3분, 최대 3회. Proxy 내부 파생 응찰은 별도 트리거가 아니다 - 호출자(BidCommandService/
+    // 종료 연장 정책(FINAL contract §0.13/§9): 마감 전 종료까지 남은 시간이 10초 이하일 때 성공한
+    // 사용자 command로 실제 Bid가 발생하면 기존 endAt에 +20초, 최대 1회. Proxy 내부 파생 응찰은 별도 트리거가 아니다 - 호출자(BidCommandService/
     // AutoBidCommandService)가 사용자 command당 maybeExtend()를 최대 1번만 호출해서 보장한다.
-    public static final int MAX_EXTENSIONS = 3;
-    private static final Duration EXTENSION_TRIGGER_WINDOW = Duration.ofMinutes(1);
-    private static final Duration EXTENSION_DURATION = Duration.ofMinutes(3);
+    public static final int MAX_EXTENSIONS = 1;
+    private static final Duration EXTENSION_TRIGGER_WINDOW = Duration.ofSeconds(10);
+    private static final Duration EXTENSION_DURATION = Duration.ofSeconds(20);
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -234,7 +234,8 @@ public class Auction {
 
     // 종료 연장 정책(FINAL contract §0.13/§9)의 유일한 진입점이다. 호출자가 "성공한 사용자 command당
     // 최대 1회"를 보장해야 한다 - 이 메서드 자체는 몇 번을 호출해도 방어하지 않는다(멱등하지 않음).
-    // 경계값은 "종료 1분 이내"를 포함(inclusive)한다 - now가 endAt보다 1분 이상 이전이면 연장하지 않는다.
+    // 경계값은 "종료 10초 이내"를 포함(inclusive)한다 - now가 endAt보다 10초 넘게 이전이면 연장하지 않는다.
+    // 마감 이후(now >= endAt) 호출은 호출자가 hasReachedDeadline()으로 먼저 거절한다.
     public boolean maybeExtend(LocalDateTime now) {
         if (extensionCount >= MAX_EXTENSIONS) {
             return false;

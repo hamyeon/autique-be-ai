@@ -25,7 +25,7 @@ AI 담당은 셋이다. (1) 자연어 → Goal 초안 파싱, (2) 매물 적합�
 ## 전체 동작 흐름
 
 AI 부품(파서·Matcher·시세 provider)과 백엔드 워크플로(#109)를 합친 전체 흐름이다. 탐색은 `PurchaseGoalScanScheduler`가
-5분마다 돌린다(기본 꺼짐, `PURCHASE_AGENT_SCAN_ENABLED`). 낙찰 판정·재탐색·만료는 `PurchaseGoalResultObservationService`.
+30초마다 돌린다(기본 꺼짐, `PURCHASE_AGENT_SCAN_ENABLED`). 낙찰 판정·재탐색·만료는 `PurchaseGoalResultObservationService`.
 
 ```mermaid
 flowchart TD
@@ -33,7 +33,7 @@ flowchart TD
     B --> C["사용자 확인 · 수정"]
     C --> D["구매 목표 등록<br>서버 검증"]
 
-    D --> E{{"5분마다 탐색"}}
+    D --> E{{"30초마다 탐색"}}
     E --> F["1차 필터<br>모델 · 최소 등급 · 사이즈 · 예산"]
     F --> G["Matcher<br>'이 매물이 목표에 맞는가' 판정"]
     G --> H["후보 순위<br>서버 시세 대비 할인율"]

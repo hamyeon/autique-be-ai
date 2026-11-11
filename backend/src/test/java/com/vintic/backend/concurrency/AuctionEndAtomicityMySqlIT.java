@@ -195,7 +195,7 @@ class AuctionEndAtomicityMySqlIT {
                 300000, 350000, "285,000원 ~ 315,000원", 290000, "사유", "설명"
         ));
         // endAt을 이미 지난 시각(now - 10s)으로 둔다 - endIfDue()의 "이미 마감 시각을 지났는지" 판정과
-        // maybeExtend()의 EXTENSION_TRIGGER_WINDOW(마감 1분 전부터, 상한 없음) 판정을 실행 순서와
+        // maybeExtend()의 EXTENSION_TRIGGER_WINDOW(마감 10초 전부터, 상한 없음) 판정을 실행 순서와
         // 무관하게 동시에 만족시키기 위함이다(#73-2 endAt은 "재조회 시점의 최신값" 기준이므로, 어느
         // 쪽이 먼저 lock을 잡아도 각자 유효한 후보로 남는다).
         LocalDateTime originalEndAt = LocalDateTime.now().minusSeconds(10);

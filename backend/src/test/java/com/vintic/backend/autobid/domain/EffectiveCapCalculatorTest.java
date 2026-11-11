@@ -58,6 +58,32 @@ class EffectiveCapCalculatorTest {
         }
     }
 
+    // D1 회귀: maxAmount < currentPrice이고 차이가 bidIncrement 배수가 아니면, 0 쪽 버림('/')은
+    // maxAmount보다 높은 지점을 만들어 예외가 났다. 내림(floorDiv)이면 maxAmount 아래 grid 지점이다.
+    @Test
+    void maxAmount가_currentPrice보다_낮고_차이가_배수가_아니면_maxAmount_아래_grid_지점으로_내림한다() {
+        // (132000-135000)/5000 = -0.6 -> floor -1 -> 130000
+        assertThat(EffectiveCapCalculator.calculate(132000L, 135000L, 5000L)).isEqualTo(130000L);
+        // (132000-140000)/5000 = -1.6 -> floor -2 -> 130000
+        assertThat(EffectiveCapCalculator.calculate(132000L, 140000L, 5000L)).isEqualTo(130000L);
+    }
+
+    @Test
+    void maxAmount가_currentPrice보다_낮고_차이가_배수면_maxAmount_그대로다() {
+        assertThat(EffectiveCapCalculator.calculate(130000L, 140000L, 5000L)).isEqualTo(130000L);
+    }
+
+    @Test
+    void maxAmount가_currentPrice보다_낮아도_maxAmount를_넘지_않고_grid_위에_있다() {
+        long[] maxAmounts = {100001L, 104999L, 131999L, 132000L, 134999L};
+        for (long maxAmount : maxAmounts) {
+            long effectiveCap = EffectiveCapCalculator.calculate(maxAmount, 135000L, 5000L);
+            assertThat(effectiveCap).isLessThanOrEqualTo(maxAmount);
+            assertThat(effectiveCap).isGreaterThan(maxAmount - 5000L);
+            assertThat(Math.floorMod(effectiveCap - 135000L, 5000L)).isZero();
+        }
+    }
+
     @Test
     void bidIncrement이_1이어도_정상_계산된다() {
         long effectiveCap = EffectiveCapCalculator.calculate(100005L, 100000L, 1L);

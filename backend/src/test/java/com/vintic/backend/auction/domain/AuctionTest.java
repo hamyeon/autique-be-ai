@@ -410,23 +410,36 @@ class AuctionTest {
     }
 
     @Test
-    void 종료_정확히_1분_전이면_연장된다() {
+    void 종료_정확히_10초_전이면_기존_endAt에_20초가_추가된다() {
         LocalDateTime endAt = LocalDateTime.of(2026, 1, 1, 12, 0, 0);
         Auction auction = liveAuctionEndingAt(endAt);
-        LocalDateTime now = endAt.minusMinutes(1); // 경계값: 정확히 1분 전(inclusive)
+        LocalDateTime now = endAt.minusSeconds(10); // 경계값: 정확히 10초 전(inclusive)
 
         boolean extended = auction.maybeExtend(now);
 
         assertThat(extended).isTrue();
-        assertThat(auction.getEndAt()).isEqualTo(endAt.plusMinutes(3));
+        assertThat(auction.getEndAt()).isEqualTo(endAt.plusSeconds(20));
         assertThat(auction.getExtensionCount()).isEqualTo(1);
     }
 
     @Test
-    void 종료_1분_초과_전이면_연장되지_않는다() {
+    void 종료_5초_전이면_기존_endAt에_20초가_추가된다() {
         LocalDateTime endAt = LocalDateTime.of(2026, 1, 1, 12, 0, 0);
         Auction auction = liveAuctionEndingAt(endAt);
-        LocalDateTime now = endAt.minusMinutes(1).minusSeconds(1); // 1분보다 1초 더 이전
+
+        boolean extended = auction.maybeExtend(endAt.minusSeconds(5));
+
+        assertThat(extended).isTrue();
+        // 호출 시각(now) 기준이 아니라 기존 endAt 기준으로 20초를 더한다.
+        assertThat(auction.getEndAt()).isEqualTo(endAt.plusSeconds(20));
+        assertThat(auction.getExtensionCount()).isEqualTo(1);
+    }
+
+    @Test
+    void 종료_11초_전이면_연장되지_않는다() {
+        LocalDateTime endAt = LocalDateTime.of(2026, 1, 1, 12, 0, 0);
+        Auction auction = liveAuctionEndingAt(endAt);
+        LocalDateTime now = endAt.minusSeconds(11); // 10초보다 1초 더 이전
 
         boolean extended = auction.maybeExtend(now);
 
@@ -436,22 +449,19 @@ class AuctionTest {
     }
 
     @Test
-    void 최대_3회까지만_연장되고_4번째_시도는_무시된다() {
+    void 최대_1회만_연장되고_연장된_endAt의_10초_이내_재시도는_무시된다() {
         LocalDateTime endAt = LocalDateTime.of(2026, 1, 1, 12, 0, 0);
         Auction auction = liveAuctionEndingAt(endAt);
 
-        // 매번 endAt 1분 전에 재도전한다고 가정 - 매 호출 시점의 (갱신된) endAt 기준 1분 전을 사용한다.
-        for (int i = 0; i < Auction.MAX_EXTENSIONS; i++) {
-            LocalDateTime now = auction.getEndAt().minusMinutes(1);
-            assertThat(auction.maybeExtend(now)).isTrue();
-        }
-        assertThat(auction.getExtensionCount()).isEqualTo(Auction.MAX_EXTENSIONS);
+        assertThat(Auction.MAX_EXTENSIONS).isEqualTo(1);
+        assertThat(auction.maybeExtend(endAt.minusSeconds(5))).isTrue();
         LocalDateTime endAtAfterMax = auction.getEndAt();
 
-        boolean fourthAttempt = auction.maybeExtend(endAtAfterMax.minusMinutes(1));
+        // 연장된 endAt 기준으로도 트리거 구간(5초 전) 안이지만, 이미 1회 연장했으므로 무시된다.
+        boolean secondAttempt = auction.maybeExtend(endAtAfterMax.minusSeconds(5));
 
-        assertThat(fourthAttempt).isFalse();
-        assertThat(auction.getExtensionCount()).isEqualTo(Auction.MAX_EXTENSIONS);
+        assertThat(secondAttempt).isFalse();
+        assertThat(auction.getExtensionCount()).isEqualTo(1);
         assertThat(auction.getEndAt()).isEqualTo(endAtAfterMax);
     }
 }

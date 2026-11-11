@@ -200,7 +200,10 @@ class FullFlowE2EMySqlIT {
         // 값일 뿐이다 - markAuctionLive()가 곧바로 LIVE 상태와 실제 테스트용 시각으로
         // 덮어쓴다(정책 완화 없이 그대로 만족시킨 뒤 갈아치운다).
         OffsetDateTime start = OffsetDateTime.now().plusMinutes(10);
-        OffsetDateTime end = start.plusHours(2);
+        return registerProduct(start, start.plusHours(2));
+    }
+
+    private RegisteredProduct registerProduct(OffsetDateTime start, OffsetDateTime end) throws Exception {
         Long analysisId = newRegistrableSession();
         String body = mockMvc.perform(post("/api/products")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -309,6 +312,46 @@ class FullFlowE2EMySqlIT {
 
         assertThat(orderRepository.findById(order.getId()).orElseThrow().getStatus())
                 .isEqualTo(OrderStatus.PAID);
+    }
+
+    @Test
+    @DisplayName("최소 진행시간 2분짜리 경매도 등록 → 종료 직전 입찰 연장 → 낙찰 주문 → 결과 조회까지 이어진다")
+    void 진행시간_2분_경매도_낙찰과_결과_조회까지_이어진다() throws Exception {
+        // 1) 진행시간 정확히 2분으로 실제 등록 API를 통과한다
+        OffsetDateTime start = OffsetDateTime.now().plusMinutes(1);
+        RegisteredProduct registered = registerProduct(start, start.plusMinutes(2));
+        Auction registeredAuction = auctionRepository.findById(registered.auctionId()).orElseThrow();
+        assertThat(java.time.Duration.between(registeredAuction.getStartAt(), registeredAuction.getEndAt()))
+                .isEqualTo(java.time.Duration.ofMinutes(2));
+
+        // 2) 스케줄러 전이 대신 LIVE로 만들고 남은 시간을 8초로 둔다(연장 구간 안)
+        Long auctionId = markAuctionLive(registered.auctionId(), LocalDateTime.now().plusSeconds(8));
+        LocalDateTime originalEndAt = auctionRepository.findById(auctionId).orElseThrow().getEndAt();
+
+        // 3) 첫 입찰은 기존 endAt에 20초를 더한다
+        placeBid(auctionId, buyerId, 105_000L, "short-bid-1");
+        Auction afterFirst = auctionRepository.findById(auctionId).orElseThrow();
+        assertThat(afterFirst.getExtensionCount()).isEqualTo(1);
+        assertThat(afterFirst.getEndAt()).isEqualTo(originalEndAt.plusSeconds(20));
+
+        // 4) 다음 입찰은 더 연장하지 않는다(최대 1회)
+        placeBid(auctionId, secondBuyerId, 110_000L, "short-bid-2");
+        Auction afterSecond = auctionRepository.findById(auctionId).orElseThrow();
+        assertThat(afterSecond.getExtensionCount()).isEqualTo(1);
+        assertThat(afterSecond.getEndAt()).isEqualTo(originalEndAt.plusSeconds(20));
+
+        // 5) 마감 → 낙찰자 주문 생성
+        Order order = endAuctionAndSettle(auctionId);
+        assertThat(order).isNotNull();
+        assertThat(order.getStatus()).isEqualTo(OrderStatus.PAYMENT_PENDING);
+        assertThat(order.getBuyer().getId()).isEqualTo(secondBuyerId);
+
+        // 6) 낙찰자가 결과를 조회할 수 있다
+        mockMvc.perform(get("/api/auctions/{id}/result", auctionId)
+                        .header("X-User-Id", secondBuyerId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.result").value("WON"))
+                .andExpect(jsonPath("$.data.orderId").value(order.getId()));
     }
 
     @Test

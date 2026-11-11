@@ -1326,7 +1326,7 @@ POST /api/products                   (아래 본문 — imageUrls 없음)
 | `brand` / `modelName` / `color` / `conditionGrade` / `componentStatus` | `String` | O | X | `@NotBlank`. 값 범위는 검사하지 않음(등급은 "상태 등급 정리" 참고) |
 | `size` / `recommendedPrice` / `sellingPrice` | `Integer` | O | X | `@NotNull`(`recommendedPrice: 0` 허용) |
 | `auctionStartPrice` | `Long` | O | X | `@NotNull @Positive` |
-| `auctionStartAt` / `auctionEndAt` | `String`(ISO-8601 offset) | O | X | `@NotNull`, 시작은 현재 이후·진행시간 1시간 이상(`40006`) |
+| `auctionStartAt` / `auctionEndAt` | `String`(ISO-8601 offset) | O | X | `@NotNull`, 시작은 현재 이후·진행시간 2분 이상(`40006`) |
 | `baseMarketPrice` / `priceRange` / `reason` / `sellerDescription` | — | X | O | 선택. `sellerDescription`이 상품 상세의 `description`이 됨 |
 | `conditionDescription` | `String` | X | O | 선택, `@Size(max=1000)`. 생략·`null`·공백이면 분석 결과의 상태 설명 사용. 위 "상태 설명 규칙" 참고 |
 

@@ -399,24 +399,58 @@ class ProductRegistrationServiceTest {
         assertThat(response.bidIncrement()).isEqualTo(BidIncrementPolicy.DEFAULT_BID_INCREMENT);
     }
 
+    private CreateProductRequest requestWithAuctionTimes(OffsetDateTime startAt, OffsetDateTime endAt) {
+        return new CreateProductRequest(
+                request.analysisId(),
+                request.imageUrls(), request.brand(), request.modelName(), request.color(), request.size(),
+                request.conditionGrade(), request.componentStatus(), request.recommendedPrice(),
+                request.baseMarketPrice(), request.priceRange(), request.sellingPrice(), request.reason(),
+                request.sellerDescription(), request.conditionDescription(),
+                request.auctionStartPrice(), startAt, endAt
+        );
+    }
+
     @Test
-    void 경매_진행시간이_1시간_미만이면_상품_저장까지_포함해_전체가_실패한다() {
+    void 경매_진행시간이_2분_미만이면_상품_저장까지_포함해_전체가_실패한다() {
         initSut();
         User seller = User.register("seller@vintic.local", "seller", null);
         when(userRepository.findById(1L)).thenReturn(Optional.of(seller));
         when(sessionRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(registrableSession()));
         when(productRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
-        CreateProductRequest invalid = new CreateProductRequest(
-                request.analysisId(),
-                request.imageUrls(), request.brand(), request.modelName(), request.color(), request.size(),
-                request.conditionGrade(), request.componentStatus(), request.recommendedPrice(),
-                request.baseMarketPrice(), request.priceRange(), request.sellingPrice(), request.reason(),
-                request.sellerDescription(), request.conditionDescription(),
-                request.auctionStartPrice(), NOW_KST.plusHours(1), NOW_KST.plusHours(1).plusMinutes(59).plusSeconds(59)
+        CreateProductRequest invalid = requestWithAuctionTimes(
+                NOW_KST.plusHours(1), NOW_KST.plusHours(1).plusMinutes(1).plusSeconds(59)
         );
 
         assertThatThrownBy(() -> sut.createProduct(invalid, 1L))
+                .isInstanceOf(InvalidAuctionTimeException.class);
+
+        verify(auctionRepository, never()).save(any());
+    }
+
+    @Test
+    void 경매_진행시간이_정확히_2분이면_등록된다() {
+        initSut();
+        stubHappyPath();
+        OffsetDateTime startAt = NOW_KST.plusMinutes(1);
+
+        ProductResponse response = sut.createProduct(requestWithAuctionTimes(startAt, startAt.plusMinutes(2)), 1L);
+
+        assertThat(response.auctionStatus()).isEqualTo("SCHEDULED");
+        verify(auctionRepository).save(any());
+    }
+
+    @Test
+    void 시작_시각이_현재보다_미래가_아니면_등록이_실패한다() {
+        initSut();
+        User seller = User.register("seller@vintic.local", "seller", null);
+        when(userRepository.findById(1L)).thenReturn(Optional.of(seller));
+        when(sessionRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(registrableSession()));
+        when(productRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        CreateProductRequest pastStart = requestWithAuctionTimes(NOW_KST.minusSeconds(1), NOW_KST.plusMinutes(5));
+
+        assertThatThrownBy(() -> sut.createProduct(pastStart, 1L))
                 .isInstanceOf(InvalidAuctionTimeException.class);
 
         verify(auctionRepository, never()).save(any());

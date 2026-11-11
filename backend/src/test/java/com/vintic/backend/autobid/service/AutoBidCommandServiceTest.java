@@ -707,12 +707,12 @@ class AutoBidCommandServiceTest {
     // ===== 종료 연장 =====
 
     @Test
-    void POST_등록으로_bidOccurred가_true이면_종료_1분_이내에서_연장된다() {
+    void POST_등록으로_bidOccurred가_true이면_종료_10초_이내에서_20초_연장된다() {
         User seller = persistUser("seller@vintic.local");
         User bidder = persistUser("bidder@vintic.local");
         User competitorUser = persistUser("competitor@vintic.local");
         Product product = persistProduct(seller);
-        LocalDateTime endAt = fixedNow().plusSeconds(30);
+        LocalDateTime endAt = fixedNow().plusSeconds(5);
         Auction auction = persistLiveAuctionEndingAt(product, 105000L, endAt);
         AutoBidSetting existingCompetitor = AutoBidSetting.reserve(auction, competitorUser, 110000L);
         existingCompetitor.activate();
@@ -725,7 +725,7 @@ class AutoBidCommandServiceTest {
         assertThat(response.bidOccurred()).isTrue();
         Auction reloaded = auctionRepository.findById(auction.getId()).orElseThrow();
         assertThat(reloaded.getExtensionCount()).isEqualTo(1);
-        assertThat(reloaded.getEndAt()).isEqualTo(endAt.plusMinutes(3));
+        assertThat(reloaded.getEndAt()).isEqualTo(endAt.plusSeconds(20));
     }
 
     // #Day8: "경쟁자 없는 POST 등록은 bidOccurred=false"라는 옛 전제가 사라졌다(유일한 entrant도
@@ -734,15 +734,15 @@ class AutoBidCommandServiceTest {
     // 종료 임박 시 연장되지 않는다"는 원래 취지를 지키려면, 이제는 §0.13상 실제로 bidOccurred=false가
     // 나오는 유일한 경우(이미 currentWinner인 entrant의 cap 인상)로 시나리오를 바꿔야 한다.
     @Test
-    void PATCH_상향으로_bidOccurred가_false이면_종료_1분_이내여도_추가_연장되지_않는다() {
+    void PATCH_상향으로_bidOccurred가_false이면_종료_10초_이내여도_추가_연장되지_않는다() {
         User seller = persistUser("seller@vintic.local");
         User bidder = persistUser("bidder@vintic.local");
         Product product = persistProduct(seller);
-        LocalDateTime endAt = fixedNow().plusSeconds(30);
+        LocalDateTime endAt = fixedNow().plusSeconds(5);
         Auction auction = persistLiveAuctionEndingAt(product, 105000L, endAt);
         flushAndClear();
 
-        // 최초 등록(유일한 입찰자)은 실제로 낙찰되며 종료 1분 이내라 1회 연장된다 - 이 테스트의
+        // 최초 등록(유일한 입찰자)은 실제로 낙찰되며 종료 10초 이내라 1회 연장된다 - 이 테스트의
         // 관심사는 그 다음 cap 인상이다.
         autoBidCommandService.createAutoBid(auction.getId(), bidder.getId(), 200000L);
         flushAndClear();
@@ -751,7 +751,7 @@ class AutoBidCommandServiceTest {
         LocalDateTime endAtAfterFirstExtension = afterFirstBid.getEndAt();
 
         // 경쟁자가 없어 cap만 올리는 것은 스스로에게 다시 응찰하지 않는다(bidOccurred=false) -
-        // 종료 시각이 여전히 1분 이내여도 추가 연장은 없다.
+        // 추가 연장은 없다.
         AutoBidUpdateResponse response = autoBidCommandService.updateAutoBid(auction.getId(), bidder.getId(), 300000L);
 
         assertThat(response.bidOccurred()).isFalse();
@@ -761,12 +761,12 @@ class AutoBidCommandServiceTest {
     }
 
     @Test
-    void PATCH_상향으로_bidOccurred가_true이면_종료_1분_이내에서_연장된다() {
+    void PATCH_상향으로_bidOccurred가_true이면_종료_10초_이내에서_20초_연장된다() {
         User seller = persistUser("seller@vintic.local");
         User bidder = persistUser("bidder@vintic.local");
         User weakerBidder = persistUser("weaker@vintic.local");
         Product product = persistProduct(seller);
-        LocalDateTime endAt = fixedNow().plusSeconds(30);
+        LocalDateTime endAt = fixedNow().plusSeconds(5);
         Auction auction = persistLiveAuctionEndingAt(product, 105000L, endAt);
         AutoBidSetting competitor = AutoBidSetting.reserve(auction, weakerBidder, 120000L);
         competitor.activate();
@@ -782,16 +782,16 @@ class AutoBidCommandServiceTest {
         assertThat(response.bidOccurred()).isTrue();
         Auction reloaded = auctionRepository.findById(auction.getId()).orElseThrow();
         assertThat(reloaded.getExtensionCount()).isEqualTo(1);
-        assertThat(reloaded.getEndAt()).isEqualTo(endAt.plusMinutes(3));
+        assertThat(reloaded.getEndAt()).isEqualTo(endAt.plusSeconds(20));
     }
 
     @Test
-    void PATCH_상향해도_bidOccurred가_false이면_종료_1분_이내여도_연장되지_않는다() {
+    void PATCH_상향해도_bidOccurred가_false이면_종료_10초_이내여도_연장되지_않는다() {
         User seller = persistUser("seller@vintic.local");
         User bidder = persistUser("bidder@vintic.local");
         User strongerBidder = persistUser("stronger@vintic.local");
         Product product = persistProduct(seller);
-        LocalDateTime endAt = fixedNow().plusSeconds(30);
+        LocalDateTime endAt = fixedNow().plusSeconds(5);
         Auction auction = persistLiveAuctionEndingAt(product, 105000L, endAt);
         AutoBidSetting competitor = AutoBidSetting.reserve(auction, strongerBidder, 500000L);
         competitor.activate();
