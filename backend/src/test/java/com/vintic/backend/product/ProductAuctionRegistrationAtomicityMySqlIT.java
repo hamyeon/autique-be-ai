@@ -43,7 +43,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 // 상품 등록과 첫 경매 등록은 같은 트랜잭션에 있다(ProductRegistrationService.createProduct()).
-// 경매 쪽 검증(진행시간 최소 1시간)이 Product insert 이후에 실패하면 이미 실행된 Product insert도
+// 경매 쪽 검증(진행시간 최소 2분)이 Product insert 이후에 실패하면 이미 실행된 Product insert도
 // 함께 롤백되는지를 실제 MySQL(Testcontainers)로 확인한다 - Mockito 단위테스트는 실제 트랜잭션
 // 커밋/롤백을 검증할 수 없어(ProductRegistrationServiceTest는 "auction 저장이 호출되지 않는지"만
 // 확인) 이 원자성 자체는 여기서만 신뢰성 있게 검증된다.
@@ -149,7 +149,7 @@ class ProductAuctionRegistrationAtomicityMySqlIT {
     }
 
     @Test
-    void 경매_진행시간이_1시간_미만이면_이미_저장된_상품도_롤백된다() {
+    void 경매_진행시간이_2분_미만이면_이미_저장된_상품도_롤백된다() {
         User seller = userRepository.save(User.register(
                 "seller-" + System.identityHashCode(new Object()) + "@vintic.local", "seller", null
         ));
@@ -157,7 +157,7 @@ class ProductAuctionRegistrationAtomicityMySqlIT {
         long auctionCountBefore = auctionRepository.count();
 
         OffsetDateTime startAt = OffsetDateTime.now().plusHours(1);
-        OffsetDateTime endAt = startAt.plusMinutes(30); // 30분 < 1시간, 실패 유도
+        OffsetDateTime endAt = startAt.plusMinutes(1).plusSeconds(59); // 1분59초 < 2분, 실패 유도
 
         ResponseEntity<ApiResponse<ProductResponse>> response = restTemplate.exchange(
                 "/api/products", HttpMethod.POST,

@@ -65,7 +65,7 @@ false로), 그 반대로 통과시키지 않는다. 목표 파싱 결과도 `Goa
 ## 4. 탐색 주기 (`PurchaseGoalScanScheduler`)
 
 ⚪ **기본 비활성화**다 — `purchase-agent.scan.enabled`(환경변수 `PURCHASE_AGENT_SCAN_ENABLED`) 기본값
-`false`. 모든 프로필에서 꺼져 있고, 켜야 동작한다. 기본 5분 주기(`purchase-agent.scan.cron`)로 돌며 한 번의
+`false`. 모든 프로필에서 꺼져 있고, 켜야 동작한다. 기본 30초 주기(`purchase-agent.scan.cron`)로 돌며 한 번의
 `scan()`은 **세 단계를 이 순서로** 실행한다:
 
 1. **만료 처리** — 기한이 지난 `ACTIVE` 목표를 `EXPIRED`로.
@@ -74,6 +74,11 @@ false로), 그 반대로 통과시키지 않는다. 목표 파싱 결과도 `Goa
 
 순서 이유: 만료를 먼저 해 지난 목표가 새로 참여하지 않게 하고, 결과 관찰을 탐색보다 먼저 해 **졌지만 기한이
 남아 `ACTIVE`로 돌아온 목표가 같은 주기에 곧바로 재탐색**되게 한다.
+
+스캔은 경매 시작·종료와 스레드를 공유하지 않는 **전용 스레드 1개**에서 돈다(`SchedulingConfig`). 그래서
+Matcher(AI) 호출이 오래 걸려도 경매 시작·종료는 계속 돈다. 스캔끼리는 겹치지 않고, 이전 스캔이 끝난 뒤 다음
+cron 시각에 다음 스캔이 돈다 - **스캔이 30초보다 오래 걸리면 실제 간격도 길어지고**, 밀린 스캔을 몰아서
+실행하지 않는다. 시연 서버에서 켜는 방법은 `docs/deployment/configuration.md`의 "도메인 스케줄러" 참고.
 
 ## 5. 후보 필터 · 랭킹 · Matcher 결과 저장
 

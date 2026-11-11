@@ -8,15 +8,17 @@ public final class EffectiveCapCalculator {
     private EffectiveCapCalculator() {
     }
 
-    // maxAmount가 bidIncrement 배수로 정렬돼 있지 않아도(등록 시 정렬을 요구하지 않음) 실제 도달
-    // 가능한 마지막 grid 지점을 반환한다. currentPrice 이하로는 절대 내려가지 않고, maxAmount를
-    // 절대 초과하지 않는다(effectiveCap <= maxAmount).
+    // maxAmount 이하인 grid 지점(currentPrice + k * bidIncrement) 중 가장 큰 값을 반환한다.
+    // maxAmount가 bidIncrement 배수로 정렬돼 있지 않아도 된다(등록 시 정렬을 요구하지 않음).
+    // maxAmount < currentPrice이면 k가 음수가 되어 결과도 currentPrice보다 낮다 - "이 상한으로는
+    // 현재가에 대응할 수 없다"는 뜻이고, ProxyPriceEngine은 이런 후보를 CAP_REACHED로 판정한다.
+    // 반드시 floorDiv를 써야 한다: Java의 '/'는 0 쪽으로 버리므로 음수 차이에서 한 단계 위
+    // 지점(maxAmount 초과)을 만든다(예: max 132000, 현재가 135000 -> 135000이 나옴).
     public static long calculate(long maxAmount, long currentPrice, long bidIncrement) {
-        long steps = (maxAmount - currentPrice) / bidIncrement;
+        long steps = Math.floorDiv(maxAmount - currentPrice, bidIncrement);
         long effectiveCap = currentPrice + steps * bidIncrement;
         if (effectiveCap > maxAmount) {
-            // 수학적으로 발생할 수 없다(정수 나눗셈 floor 특성) - 계산식이 깨졌다는 신호이므로
-            // 조용히 넘기지 않는다.
+            // floorDiv에서는 발생할 수 없다 - 계산식이 깨졌다는 신호이므로 조용히 넘기지 않는다.
             throw new IllegalStateException(
                     "effectiveCap이 maxAmount를 초과했습니다. maxAmount=" + maxAmount
                             + ", currentPrice=" + currentPrice + ", bidIncrement=" + bidIncrement

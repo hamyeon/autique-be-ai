@@ -558,28 +558,104 @@ class BidCommandServiceTest {
     // ===== 종료 연장 =====
 
     @Test
-    void 종료_1분_이내에_성공한_입찰은_endsAt이_3분_연장되고_extensionCount가_증가한다() {
+    void 종료_정확히_10초_전에_성공한_입찰은_endsAt이_20초_연장되고_extensionCount가_1이_된다() {
         User seller = persistUser("seller@vintic.local");
         User bidder = persistUser("bidder@vintic.local");
         Product product = persistProduct(seller);
-        LocalDateTime endAt = fixedNow().plusSeconds(30); // 종료 30초 전 = 1분 이내
+        LocalDateTime endAt = fixedNow().plusSeconds(10); // 경계값: 남은 시간 정확히 10초
         Auction auction = persistLiveAuctionEndingAt(product, endAt);
         flushAndClear();
 
         PlaceBidResponse response = bidCommandService.placeManualBid(auction.getId(), bidder.getId(), 15000L);
 
         assertThat(response.extensionCount()).isEqualTo(1);
-        assertThat(response.endsAt().toLocalDateTime()).isEqualTo(endAt.plusMinutes(3));
+        assertThat(response.endsAt().toLocalDateTime()).isEqualTo(endAt.plusSeconds(20));
         Auction reloaded = auctionRepository.findById(auction.getId()).orElseThrow();
         assertThat(reloaded.getExtensionCount()).isEqualTo(1);
+        assertThat(reloaded.getEndAt()).isEqualTo(endAt.plusSeconds(20));
     }
 
     @Test
-    void 종료_1분보다_많이_남았으면_성공한_입찰이어도_연장되지_않는다() {
+    void 종료_5초_전에_성공한_입찰은_기존_endAt에_20초가_추가된다() {
         User seller = persistUser("seller@vintic.local");
         User bidder = persistUser("bidder@vintic.local");
         Product product = persistProduct(seller);
-        LocalDateTime endAt = fixedNow().plusMinutes(5); // 종료까지 5분 남음
+        LocalDateTime endAt = fixedNow().plusSeconds(5);
+        Auction auction = persistLiveAuctionEndingAt(product, endAt);
+        flushAndClear();
+
+        PlaceBidResponse response = bidCommandService.placeManualBid(auction.getId(), bidder.getId(), 15000L);
+
+        assertThat(response.extensionCount()).isEqualTo(1);
+        assertThat(response.endsAt().toLocalDateTime()).isEqualTo(endAt.plusSeconds(20));
+    }
+
+    @Test
+    void 이미_1회_연장된_경매는_종료_10초_이내에_입찰이_성공해도_추가_연장되지_않는다() {
+        User seller = persistUser("seller@vintic.local");
+        User bidder = persistUser("bidder@vintic.local");
+        Product product = persistProduct(seller);
+        // 원래 endAt(now-10초)에서 1회 연장돼 최신 endAt은 now+10초 - 다시 트리거 구간 안이다.
+        LocalDateTime originalEndAt = fixedNow().minusSeconds(10);
+        Auction auction = Auction.schedule(product, 10000L, 5000L, originalEndAt.minusHours(1), originalEndAt);
+        auction.start();
+        assertThat(auction.maybeExtend(originalEndAt.minusSeconds(5))).isTrue();
+        entityManager.persist(auction);
+        flushAndClear();
+        LocalDateTime extendedEndAt = originalEndAt.plusSeconds(20);
+
+        PlaceBidResponse response = bidCommandService.placeManualBid(auction.getId(), bidder.getId(), 15000L);
+
+        assertThat(response.isHighestBidder()).isTrue();
+        assertThat(response.extensionCount()).isEqualTo(1);
+        assertThat(response.endsAt().toLocalDateTime()).isEqualTo(extendedEndAt);
+        Auction reloaded = auctionRepository.findById(auction.getId()).orElseThrow();
+        assertThat(reloaded.getExtensionCount()).isEqualTo(1);
+        assertThat(reloaded.getEndAt()).isEqualTo(extendedEndAt);
+    }
+
+    @Test
+    void 마감_시각에_정확히_도달한_LIVE_경매에_입찰하면_거절되고_연장되지_않는다() {
+        User seller = persistUser("seller@vintic.local");
+        User bidder = persistUser("bidder@vintic.local");
+        Product product = persistProduct(seller);
+        LocalDateTime endAt = fixedNow(); // 남은 시간 0초 - 스케줄러가 아직 ENDED로 바꾸지 않은 상태
+        Auction auction = persistLiveAuctionEndingAt(product, endAt);
+        flushAndClear();
+
+        assertThatThrownBy(() -> bidCommandService.placeManualBid(auction.getId(), bidder.getId(), 15000L))
+                .isInstanceOf(AuctionClosedException.class);
+
+        Auction reloaded = auctionRepository.findById(auction.getId()).orElseThrow();
+        assertThat(reloaded.getExtensionCount()).isZero();
+        assertThat(reloaded.getEndAt()).isEqualTo(endAt);
+        assertThat(bidRepository.countByAuctionId(auction.getId())).isZero();
+    }
+
+    @Test
+    void 마감_시각이_지난_LIVE_경매에_입찰하면_거절되고_연장되지_않는다() {
+        User seller = persistUser("seller@vintic.local");
+        User bidder = persistUser("bidder@vintic.local");
+        Product product = persistProduct(seller);
+        LocalDateTime endAt = fixedNow().minusSeconds(1);
+        Auction auction = persistLiveAuctionEndingAt(product, endAt);
+        flushAndClear();
+
+        assertThatThrownBy(() -> bidCommandService.placeManualBid(auction.getId(), bidder.getId(), 15000L))
+                .isInstanceOf(AuctionClosedException.class);
+
+        Auction reloaded = auctionRepository.findById(auction.getId()).orElseThrow();
+        assertThat(reloaded.getExtensionCount()).isZero();
+        assertThat(reloaded.getEndAt()).isEqualTo(endAt);
+        assertThat(bidRepository.countByAuctionId(auction.getId())).isZero();
+    }
+
+    @Test
+    void 종료_11초_전이면_성공한_입찰이어도_연장되지_않는다() {
+        User seller = persistUser("seller@vintic.local");
+        User bidder = persistUser("bidder@vintic.local");
+        Product product = persistProduct(seller);
+        LocalDateTime endAt = fixedNow().plusSeconds(11); // 트리거 구간(10초)보다 1초 이전
         Auction auction = persistLiveAuctionEndingAt(product, endAt);
         flushAndClear();
 
@@ -590,11 +666,11 @@ class BidCommandServiceTest {
     }
 
     @Test
-    void 검증에_실패한_입찰은_종료_1분_이내여도_연장되지_않는다() {
+    void 검증에_실패한_입찰은_종료_10초_이내여도_연장되지_않는다() {
         User seller = persistUser("seller@vintic.local");
         User bidder = persistUser("bidder@vintic.local");
         Product product = persistProduct(seller);
-        LocalDateTime endAt = fixedNow().plusSeconds(30);
+        LocalDateTime endAt = fixedNow().plusSeconds(5);
         Auction auction = persistLiveAuctionEndingAt(product, endAt);
         flushAndClear();
 
@@ -612,7 +688,7 @@ class BidCommandServiceTest {
         User bidder = persistUser("bidder@vintic.local");
         User autoBidder = persistUser("autobidder@vintic.local");
         Product product = persistProduct(seller);
-        LocalDateTime endAt = fixedNow().plusSeconds(30);
+        LocalDateTime endAt = fixedNow().plusSeconds(5);
         Auction auction = persistLiveAuctionEndingAt(product, endAt);
         AutoBidSetting competitor = AutoBidSetting.reserve(auction, autoBidder, 100000L);
         competitor.activate();
@@ -625,6 +701,7 @@ class BidCommandServiceTest {
 
         assertThat(response.proxyResponded()).isTrue();
         assertThat(response.extensionCount()).isEqualTo(1);
+        assertThat(response.endsAt().toLocalDateTime()).isEqualTo(endAt.plusSeconds(20));
         assertThat(bidRepository.countByAuctionId(auction.getId())).isEqualTo(2); // MANUAL + AUTO
     }
 

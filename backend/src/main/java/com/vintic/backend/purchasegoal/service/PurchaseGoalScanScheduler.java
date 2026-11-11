@@ -1,5 +1,6 @@
 package com.vintic.backend.purchasegoal.service;
 
+import com.vintic.backend.config.SchedulingConfig;
 import com.vintic.backend.purchasegoal.domain.PurchaseGoal;
 import com.vintic.backend.purchasegoal.domain.PurchaseGoalStatus;
 import com.vintic.backend.purchasegoal.repository.PurchaseGoalRepository;
@@ -13,7 +14,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
-// Day 6: Purchase Agent의 3단계 scan을 5분마다 순서대로 돈다(설계안). 순서가 중요하다 -
+// Day 6: Purchase Agent의 3단계 scan을 30초마다 순서대로 돈다(설계안). 순서가 중요하다 -
 // 1) 만료를 먼저 처리해야 이미 지난 deadline의 ACTIVE goal이 3단계에서 새로 참여를 시도하지
 //    않는다. 2) 결과 관찰을 먼저 끝내야 패배로 ACTIVE에 복귀한 goal이 같은 회차의 3) 탐색/참여
 //    대상에 들어갈 수 있다("패배 후 재탐색"). 각 phase는 후보 id 조회(non-locking) 후 goal마다
@@ -59,7 +60,9 @@ public class PurchaseGoalScanScheduler {
         this.enabled = enabled;
     }
 
-    @Scheduled(cron = "${purchase-agent.scan.cron:0 */5 * * * *}")
+    // 경매 시작/종료와 같은 스레드를 쓰지 않도록 전용 scheduler(스레드 1개)에서 돈다 - SchedulingConfig 참고.
+    // 스캔이 30초보다 오래 걸리면 다음 스캔은 끝난 뒤의 다음 cron 시각에 돌아 실제 간격이 길어진다.
+    @Scheduled(cron = "${purchase-agent.scan.cron:*/30 * * * * *}", scheduler = SchedulingConfig.PURCHASE_AGENT_SCAN_SCHEDULER)
     public void scan() {
         if (!enabled) {
             return;

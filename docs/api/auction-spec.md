@@ -198,7 +198,7 @@ Bidding 구현 시점의 기술적 세부사항으로 남겨둔다 — 이 문�
 
 > **구현 완료 (현재 코드 기준 정정).** 이 절의 가격 결정 규칙·상태 전이·FIRST-IN-WINS·실효 상한은
 > 현재 `autobid/proxy/ProxyPriceEngine`(`resolve(ProxyResolutionInput)`)로 구현돼 있고, 직접 입찰·자동입찰
-> 등록/수정·경매 시작(RESERVED 일괄 정산)에서 호출된다. 종료 연장(트리거 1분 이내 / +3분 / 최대 3회)도
+> 등록/수정·경매 시작(RESERVED 일괄 정산)에서 호출된다. 종료 연장(트리거 마감 전 10초 이내 / +20초 / 최대 1회)도
 > 구현됐다(아래 "종료 연장과 Proxy 연쇄 — RESOLVED" 절). 구현·검증 상세는 `docs/api/auction-audit.md`의
 > "Proxy Bidding 실제 구현" 참고. (과거 "Proxy 엔진 아직 미구현(#40 기준)" 표기는 현재 사실과 달라 정정함.)
 >
@@ -294,9 +294,9 @@ deterministic price resolver 한 번으로 계산 가능해야 한다.
 ### 종료 연장과 Proxy 연쇄 — RESOLVED (#43)
 
 ```
-트리거 시점: 종료 1분 이내(inclusive)
-연장 폭:     +3분
-최대 횟수:   3회 (Auction.extensionCount, MAX_EXTENSIONS=3)
+트리거 시점: 마감 전, 종료까지 남은 시간 10초 이하(inclusive). 마감 시각 도달/경과 입찰은 거절
+연장 폭:     기존 endAt + 20초
+최대 횟수:   1회 (Auction.extensionCount, MAX_EXTENSIONS=1)
 ```
 
 연장 판단 기준은 "가격/승자 변동 여부"가 아니라 **"해당 사용자 command로 실제 Bid가
@@ -763,7 +763,7 @@ ALREADY_HIGHEST_BIDDER
     "endsAt": "2026-08-17T22:00:00+09:00",
     "serverTime": "2026-08-17T20:32:10+09:00",
     "extensionCount": 0,
-    "maxExtensions": 3,
+    "maxExtensions": 1,
     "myAutoBidStatus": "ACTIVE",
     "myCap": 120000,
     "minCapAmount": 110000,
@@ -792,7 +792,7 @@ ALREADY_HIGHEST_BIDDER
     "endsAt": "2026-08-17T22:00:00+09:00",
     "serverTime": "2026-08-17T20:40:00+09:00",
     "extensionCount": 0,
-    "maxExtensions": 3,
+    "maxExtensions": 1,
     "myAutoBidStatus": "CAP_REACHED",
     "myCap": 120000,
     "minCapAmount": 130000,
@@ -1673,8 +1673,8 @@ minNextBidAmount = 110000
 >
 
 종료 연장(§0.13 참고)은 사용자 요청 1회 기준으로 적용하며, Proxy 연쇄 자체는 추가 연장을
-발생시키지 않는다. Manual Bid 성공은 항상 실제 Bid를 만들어내므로 종료 1분 이내면 +3분
-연장(최대 3회)된다.
+발생시키지 않는다. Manual Bid 성공은 항상 실제 Bid를 만들어내므로 마감 전 종료 10초 이내면 기존 endAt에
++20초 연장(최대 1회)된다.
 
 ## Request ✔️
 

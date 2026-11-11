@@ -114,6 +114,49 @@ class ProxyPriceEngineTest {
             assertThat(result.candidateResults()).containsExactly(new CandidateResult(2L, ProxyEntrantStatus.CAP_REACHED));
         }
 
+        // D1 회귀: 상한이 배수가 아닌 경쟁 AutoBid(132000) 위로 수동입찰하면 예외 없이 계약 §0.13대로
+        // manual이 M에서 이기고 경쟁자는 CAP_REACHED가 된다.
+        @Test
+        void 경쟁자_maxAmount가_배수가_아니고_M보다_낮으면_manual이_이기고_경쟁자는_CAP_REACHED다() {
+            for (long m : new long[]{135000L, 140000L}) {
+                ProxyResolutionInput input = new ProxyResolutionInput(
+                        m, INCREMENT, new ProxyTrigger.Manual(m, 1L),
+                        List.of(candidate(2L, 132000L, T0, 10L))
+                );
+
+                ProxyResolution result = engine.resolve(input);
+
+                assertThat(result.finalCurrentPrice()).isEqualTo(m);
+                assertThat(result.finalWinnerUserId()).isEqualTo(1L);
+                assertThat(result.priceChanged()).isFalse();
+                assertThat(result.resultingAutoBid()).isNull();
+                assertThat(result.proxyResponded()).isFalse();
+                assertThat(result.candidateResults()).containsExactly(new CandidateResult(2L, ProxyEntrantStatus.CAP_REACHED));
+            }
+        }
+
+        // 대응 못 하는 후보와 반격 가능한 후보가 섞여도, 대응 못 하는 쪽이 가격 계산에 끼어들지 않는다.
+        @Test
+        void 대응_못하는_비정렬_상한과_반격_가능한_상한이_섞이면_강한_쪽만_반격한다() {
+            ProxyResolutionInput input = new ProxyResolutionInput(
+                    135000L, INCREMENT, new ProxyTrigger.Manual(135000L, 1L),
+                    List.of(
+                            candidate(2L, 132000L, T0, 10L),
+                            candidate(3L, 200000L, T1, 11L)
+                    )
+            );
+
+            ProxyResolution result = engine.resolve(input);
+
+            assertThat(result.finalCurrentPrice()).isEqualTo(140000L);
+            assertThat(result.finalWinnerUserId()).isEqualTo(3L);
+            assertThat(result.resultingAutoBid()).isEqualTo(new ResultingAutoBid(3L, 140000L));
+            assertThat(result.candidateResults()).containsExactlyInAnyOrder(
+                    new CandidateResult(2L, ProxyEntrantStatus.CAP_REACHED),
+                    new CandidateResult(3L, ProxyEntrantStatus.ACTIVE)
+            );
+        }
+
         @Test
         void 경쟁자_effectiveCap이_M보다_높으면_min_M플러스증분_경쟁자cap으로_반격한다() {
             // effectiveCap(300000, 100000, 5000) = 300000 > M(100000)

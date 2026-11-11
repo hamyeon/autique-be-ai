@@ -85,7 +85,7 @@ unchanged.
 | `product.name` / `product.subName` | Frozen (§1, 둘 다 필수 O) | `Product` 엔티티에 전용 컬럼이 없다(`brand`/`model`/`colorway`만 구조화 필드로 존재) — `ProductDisplayName` 유틸로 `brand+model+colorway`를 합성해 `name`으로, `model`을 `subName`으로 임시 대체(#55) | 후속 issue — 전용 `name`/`subName`(또는 한국어/영문 구분) 컬럼 도입 여부 결정 필요(스키마 변경) |
 | `seller.completedSalesCount` | Frozen (§1, Int, 필수 O — non-null) | **RESOLVED (#56-1)** — Order 도메인(#56) 도입 후 `AuctionQueryService`가 판매자의 `PAID` Order 수를 실제 집계한다(현재 코드 확인: `orderRepository.countByAuction_Product_Seller_IdAndStatus(sellerId, OrderStatus.PAID)`). #55 당시의 `0` 고정 placeholder는 아래 `#55 Implementation Notes`에 당시 기록으로 보존 | — |
 | Endpoint #9 응답 shape (`minNextBidAmount`, `highestBidderMasked`, `isHighestBidder`, `autoBidCanceled`, `proxyResponded`, `endsAt`) | **RESOLVED (#41 후속)** | `PlaceBidResponse`를 FINAL contract shape로 전면 재작성. `extensionCount`도 #43에서 마저 추가됨(바로 아래 행) | — |
-| `/live.extensionCount` / `/live.maxExtensions` / `POST bids.extensionCount` | **RESOLVED (#43)** | 종료 연장 정책(트리거 1분 이내/+3분/최대 3회, §0.13)을 확정하고 `Auction.extensionCount`/`MAX_EXTENSIONS`를 실제 도메인 값으로 연결했다. 아래 `#43 Implementation Notes` 참고 | — |
+| `/live.extensionCount` / `/live.maxExtensions` / `POST bids.extensionCount` | **RESOLVED (#43)** | 종료 연장 정책(#43 당시 트리거 1분 이내/+3분/최대 3회, 2026-11에 마감 전 10초 이내/+20초/최대 1회로 변경, §0.13)을 확정하고 `Auction.extensionCount`/`MAX_EXTENSIONS`를 실제 도메인 값으로 연결했다. 아래 `#43 Implementation Notes` 참고 | — |
 | AutoBid POST/PATCH의 `bidOccurred`/`resultingBidAmount`/`isHighestBidder` | **RESOLVED (#42)**, 문서만 미갱신 상태였음 | 코드는 #42에서 이미 `ProxyPriceEngine` 실제 resolution 결과를 반환하도록 구현되어 있었으나(`AutoBidCommandService.createAutoBid`/`updateAutoBid`), 이 문서의 `Proxy integration boundary` 절과 Springdoc/DTO 주석에 "#41 시점, 항상 false/null/false" 문구가 #43 시점까지 남아있었다 — #43에서 문서/Springdoc만 정정했다(코드 변경 없음) | — |
 | `AutoBidSetting` 재등록 스키마 제약 | **RESOLVED (#41)**, 단 migration limitation 있음 | 아래 `#41 Implementation Notes` 참고 | — |
 
@@ -376,6 +376,10 @@ min 미만이면 배수가 맞아도 `40904`가 우선한다. AutoBid `maxAmount
 않는다(§5, 실효 상한으로 동작하는 기존 정책 그대로 유지).
 
 ### Auction 종료 연장 — RESOLVED
+
+> **2026-11 정책 변경:** 아래 #43 당시 값(1분 이내 / +3분 / 최대 3회)은 현재
+> "마감 전 10초 이내 / 기존 endAt +20초 / 최대 1회"(`MAX_EXTENSIONS=1`)로 바뀌었다. 최소 진행시간도
+> 1시간 → 2분. 트리거 대상·호출 지점·락 구조는 그대로다. 아래 본문은 #43 당시 기록이다.
 
 `Auction`에 `extensionCount`(int, 컬럼 기본값 0) 필드와 `MAX_EXTENSIONS=3` 상수를 추가했다.
 `Auction.maybeExtend(LocalDateTime now)`가 유일한 진입점이다 — `extensionCount < MAX_EXTENSIONS`
@@ -1475,8 +1479,8 @@ Result는 여전히 derived다 - 별도 Result entity/row를 만들지 않았다
 
 ```text
 auction.lifecycle.batch-size          (기본 100, 두 scheduler 공유)
-auction.lifecycle.start.cron/enabled  (기본 매분 / 기본 false)
-auction.lifecycle.end.cron/enabled    (기본 매분 / 기본 false)
+auction.lifecycle.start.cron/enabled  (기본 10초(2026-11, 이전 매분) / 기본 false)
+auction.lifecycle.end.cron/enabled    (기본 10초(2026-11, 이전 매분) / 기본 false)
 ```
 
 base(`application.yml`) 기본값은 `false`다 - `#57-2`와 동일한 이유(MySqlIT 다수가 `local`

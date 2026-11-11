@@ -138,7 +138,7 @@ VISION_PROCESSING → AWAITING_USER_CONFIRMATION`(성공) 또는 `VISION_FAILED`
 락**으로 잠근 뒤(`findByIdForUpdate`) 패널티·마감·판매자 본인 여부를 검사하고, 도메인(`Auction.placeManualBid`)이
 **최소 입찰가·입찰 단위 정렬**을 검증한다(미달 → 40904, 단위 불일치 → 40913). 같은 사용자의 자동입찰이
 있으면 취소하고, 경쟁 자동입찰은 다시 계산한다. `Bid` 1건 생성 + `currentPrice`/`currentWinner` 갱신,
-마감 1분 이내 입찰이면 **종료 연장**(+3분, 최대 3회). (`bid/service/BidCommandService.java`,
+마감 전 종료 10초 이내 입찰이면 **종료 연장**(기존 endAt +20초, 최대 1회). (`bid/service/BidCommandService.java`,
 `auction/domain/Auction.java`)
 
 **③ 자동입찰 (Proxy Bidding)** — `POST`/`PATCH /api/auctions/{id}/auto-bids...`(로그인 +

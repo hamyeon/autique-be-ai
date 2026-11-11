@@ -40,7 +40,7 @@ public class AuctionStartScheduler {
         this.batchSize = batchSize;
     }
 
-    @Scheduled(cron = "${auction.lifecycle.start.cron:0 * * * * *}")
+    @Scheduled(cron = "${auction.lifecycle.start.cron:*/10 * * * * *}")
     public void startDueAuctions() {
         if (!enabled) {
             return;
