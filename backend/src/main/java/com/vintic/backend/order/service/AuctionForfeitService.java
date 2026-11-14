@@ -24,7 +24,9 @@ import com.vintic.backend.user.domain.User;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 // FINAL contract §11. lock 순서: Auction FOR UPDATE -> Order FOR UPDATE -> validation/state
 // transition -> penalty / BackupOffer -> commit(#56-0 확정, 사용자 지시). 두 락 모두 이
@@ -99,23 +101,22 @@ public class AuctionForfeitService {
             penaltyRepository.save(Penalty.forfeited(loser, auction));
         }
 
-        createBackupOfferIfCandidateExists(auction);
+        createBackupOfferIfCandidateExists(auction, loser);
 
         return new AuctionForfeitResponse(auctionId, AuctionResult.FORFEITED);
     }
 
-    // forfeit은 항상 rank 1(낙찰자) 다음, 즉 rank 2를 제안한다 - BackupCandidateSelector.next()에
-    // afterRank=1을 넘긴다. rank 3으로의 체이닝(decline 시)은 BackupOfferCommandService.decline()이
-    // 같은 selector로 처리한다(#56-3).
-    private void createBackupOfferIfCandidateExists(Auction auction) {
+    // D2: "포기자 == 순위표 1등"을 가정하지 않는다. 실제 낙찰자(Auction.currentWinner)를 후보 풀에서
+    // 빼고, 이미 제안을 받은 사용자를 건너뛴다(BackupCandidateSelector 주석). 포기자가 차순위 수락자인
+    // 경우에도 같은 규칙으로 그 사람 다음 후보로 진행한다.
+    private void createBackupOfferIfCandidateExists(Auction auction, User forfeitedBuyer) {
         List<Bid> ranked = bidRepository.findLatestBidPerUserOrderedByRank(auction.getId());
-        BackupCandidateSelector.next(ranked, 1).ifPresent(candidateBid -> {
+        Set<Long> offeredUserIds = new HashSet<>(backupOfferRepository.findCandidateIdsByAuctionId(auction.getId()));
+        Long winnerUserId = auction.getCurrentWinner() == null ? null : auction.getCurrentWinner().getId();
+        BackupCandidateSelector.next(ranked, winnerUserId, forfeitedBuyer.getId(), offeredUserIds).ifPresent(candidateBid -> {
             User candidate = candidateBid.getUser();
-            if (backupOfferRepository.findByAuctionIdAndCandidateId(auction.getId(), candidate.getId()).isPresent()) {
-                // 방어적 중복 방지 - 정상 경로(위 CANCELED 분기의 idempotent short-circuit)에서는
-                // 도달하지 않는다. uk_backup_offer_auction_candidate가 최종 방어선이다.
-                return;
-            }
+            // uk_backup_offer_auction_candidate가 최종 방어선이다 - offeredUserIds로 이미 걸렀으므로
+            // 정상 경로에선 위반되지 않는다.
             BackupOffer saved = backupOfferRepository.save(BackupOffer.create(auction, candidate, candidateBid.getAmount()));
             // #75: 신규 BackupOffer가 실제 저장된 경우에만 기록한다(위 dedup return에는 도달하지 않음).
             notificationRecorder.record(candidate, NotificationType.BACKUP_OFFER_CREATED, auction.getId(), saved.getId());

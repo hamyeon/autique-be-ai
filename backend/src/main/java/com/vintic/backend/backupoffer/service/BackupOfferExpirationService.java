@@ -15,7 +15,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
 import java.time.LocalDateTime;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 // FINAL contract §15/§0.10, #57-2. lock 순서는 BackupOfferCommandService.lockOfferViaAuctionFirst()와
 // 동일하다: offerId -> auctionId 식별용 non-locking 조회 -> Auction FOR UPDATE -> BackupOffer
@@ -77,24 +79,18 @@ public class BackupOfferExpirationService {
         createNextBackupOfferIfCandidateExists(offer);
     }
 
-    // decline()의 다음 순위 생성 로직과 동일하다(BackupOfferCommandService.
-    // createNextBackupOfferIfCandidateExists 참고) - 새 순위 정책을 만들지 않고
-    // BackupCandidateSelector를 그대로 재사용한다. rank2 만료 -> rank3, rank3 만료 -> 없음.
+    // decline()의 다음 후보 생성 로직과 동일하다(BackupOfferCommandService.
+    // createNextBackupOfferIfCandidateExists 참고) - BackupCandidateSelector의 이력 기반 규칙을
+    // 그대로 재사용한다(D2).
     private void createNextBackupOfferIfCandidateExists(BackupOffer expiredOffer) {
         Auction auction = expiredOffer.getAuction();
         List<Bid> ranked = bidRepository.findLatestBidPerUserOrderedByRank(auction.getId());
+        Set<Long> offeredUserIds = new HashSet<>(backupOfferRepository.findCandidateIdsByAuctionId(auction.getId()));
+        Long winnerUserId = auction.getCurrentWinner() == null ? null : auction.getCurrentWinner().getId();
 
-        int expiredRank = BackupCandidateSelector.rankOf(ranked, expiredOffer.getCandidate().getId())
-                .orElseThrow(() -> new IllegalStateException(
-                        "차순위 후보의 순위를 찾을 수 없습니다. backupOfferId: " + expiredOffer.getId()
-                ));
-
-        BackupCandidateSelector.next(ranked, expiredRank).ifPresent(candidateBid -> {
+        BackupCandidateSelector.next(ranked, winnerUserId, expiredOffer.getCandidate().getId(), offeredUserIds).ifPresent(candidateBid -> {
             User nextCandidate = candidateBid.getUser();
-            if (backupOfferRepository.findByAuctionIdAndCandidateId(auction.getId(), nextCandidate.getId()).isPresent()) {
-                // 방어적 중복 방지 - uk_backup_offer_auction_candidate가 최종 방어선이다.
-                return;
-            }
+            // uk_backup_offer_auction_candidate가 최종 방어선이다.
             BackupOffer saved = backupOfferRepository.save(BackupOffer.create(auction, nextCandidate, candidateBid.getAmount()));
             // #75: 신규 BackupOffer가 실제 저장된 경우에만 기록한다.
             notificationRecorder.record(nextCandidate, NotificationType.BACKUP_OFFER_CREATED, auction.getId(), saved.getId());

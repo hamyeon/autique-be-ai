@@ -105,6 +105,9 @@ class BackupOfferExpirationConcurrencyMySqlIT {
         bidRepository.save(Bid.place(savedAuction, winner, 25000L, BidType.MANUAL));
         savedAuction.placeManualBid(winner, 25000L);
         savedAuction.end();
+        // D2: 차순위 선정이 실제 낙찰자(current_winner_id)를 기준으로 하므로, 실제 정산 흐름과 동일하게
+        // 낙찰자/종료 상태를 DB에 반영한다(detached 엔티티의 placeManualBid/end는 저장되지 않는다).
+        auctionRepository.save(savedAuction);
         BackupOffer offer = backupOfferRepository.save(BackupOffer.create(savedAuction, rank2, 20000L));
         ReflectionTestUtils.setField(offer, "deadline", LocalDateTime.now().minusMinutes(1));
         backupOfferRepository.save(offer);
