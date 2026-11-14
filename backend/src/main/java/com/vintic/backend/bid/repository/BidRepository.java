@@ -42,15 +42,22 @@ public interface BidRepository extends JpaRepository<Bid, Long> {
     // Bid amount 시퀀스는 시간 순으로 항상 증가한다 - 즉 "최신 Bid" == "그 사용자의 최고 Bid"라
     // myLastBidAmount와 rank 산정용 최고 금액이 서로 다른 값일 수 없다(별도 MAX(amount) 집계가
     // 필요 없다).
-    // 정렬은 §0.12 FIRST-IN WINS를 그대로 적용한다 - amount desc, 동률이면 그 금액에 먼저
-    // 도달한 Bid의 createdAt asc, id asc. 새 tie-break 규칙을 만들지 않았다.
+    // 정렬: amount desc -> 동률이면 AUTO가 MANUAL보다 앞 -> createdAt asc, id asc.
+    // D2: ProxyPriceEngine은 같은 금액이면 manual bid(phantom, tieBreakAt=MAX)를 항상 AutoBid에게
+    // 지게 한다. 그런데 그 동률 반격은 BidCommandService가 MANUAL Bid를 먼저, AUTO Bid를 나중에
+    // 저장하므로 createdAt/id만으로 정렬하면 진 쪽(MANUAL)이 앞에 온다. Manual bid는 항상
+    // currentPrice보다 커야 하므로 서로 다른 사용자의 최신 Bid 금액이 같아지는 경우는 사실상 이
+    // "MANUAL 패 + AUTO 승" 쌍뿐이다 - bid_type으로 엔진의 정책(AUTO 우선)을 그대로 반영한다.
+    // (AUTO끼리 같은 금액은 cap/등록시각을 Bid에 저장하지 않아 복원할 수 없다 - 기존 createdAt/id 순.)
     @Query("""
             select b from Bid b
             where b.auction.id = :auctionId
             and b.id in (
                 select max(b2.id) from Bid b2 where b2.auction.id = :auctionId group by b2.user.id
             )
-            order by b.amount desc, b.createdAt asc, b.id asc
+            order by b.amount desc,
+                case when b.bidType = com.vintic.backend.bid.domain.BidType.AUTO then 0 else 1 end asc,
+                b.createdAt asc, b.id asc
             """)
     List<Bid> findLatestBidPerUserOrderedByRank(@Param("auctionId") Long auctionId);
 }

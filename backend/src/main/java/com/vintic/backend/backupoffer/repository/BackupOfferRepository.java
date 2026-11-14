@@ -19,6 +19,12 @@ public interface BackupOfferRepository extends JpaRepository<BackupOffer, Long> 
     // 충분하다(같은 이유로 AuctionSettlementService.settle()의 Order 사전조회도 non-locking).
     Optional<BackupOffer> findByAuctionIdAndCandidateId(Long auctionId, Long candidateId);
 
+    // D2: BackupCandidateSelector가 "이미 구매 기회를 받은 사용자"를 건너뛰기 위한 이력 조회다.
+    // 상태(WAITING/ACCEPTED/DECLINED/EXPIRED)와 무관하게 전부 포함한다. 호출부는 모두 Auction
+    // FOR UPDATE를 잡은 뒤 호출하고, 같은 경매의 BackupOffer 생성은 전부 그 락 아래에서만 일어난다.
+    @Query("select bo.candidate.id from BackupOffer bo where bo.auction.id = :auctionId")
+    List<Long> findCandidateIdsByAuctionId(@Param("auctionId") Long auctionId);
+
     // GET /backup-offers/{id} 전용 - product 요약을 위해 auction.product까지 한 번에 가져온다.
     @Query("""
             select bo from BackupOffer bo

@@ -23,7 +23,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
 import java.time.LocalDateTime;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 // FINAL contract §12/§0.10, #57-2. lock 순서: orderId -> auctionId 식별용 non-locking 조회 ->
 // Auction FOR UPDATE -> Order FOR UPDATE(재조회, authoritative) -> validation -> state
@@ -112,26 +114,17 @@ public class OrderExpirationService {
         createNextBackupOfferIfCandidateExists(auction, buyer);
     }
 
-    // 만료된 Order의 buyer가 지금 몇 등인지(원 낙찰자 rank1, 차순위 수락자 rank2/3)를 찾아 그
-    // 다음 순위에게 제안한다 - BackupCandidateSelector가 rank2->rank3 체이닝을 이미 일반화해
-    // 두었으므로(#56-3) 새 순위 정책을 만들지 않고 그대로 재사용한다. rank3까지 소진되면
-    // next()가 empty를 반환해 자연히 체인이 끝난다(MAX_BACKUP_RANK=3).
+    // D2: 만료된 Order의 buyer가 실제 낙찰자든 차순위 수락자든, 순위 숫자 대신 BackupCandidateSelector
+    // 의 이력 기반 규칙(실제 낙찰자 제외 + 이미 제안받은 사용자 제외 + 처리된 사람 뒤로만 진행)으로
+    // 다음 후보를 고른다. 후보가 소진되면 empty라 체인이 끝난다.
     private void createNextBackupOfferIfCandidateExists(Auction auction, User expiredBuyer) {
         List<Bid> ranked = bidRepository.findLatestBidPerUserOrderedByRank(auction.getId());
-        Integer buyerRank = BackupCandidateSelector.rankOf(ranked, expiredBuyer.getId()).orElse(null);
-        if (buyerRank == null) {
-            // 이론상 도달하지 않는다 - Order가 존재한다는 것 자체가 buyer가 입찰 기록을 가진
-            // rank1/2/3 중 하나였다는 뜻이다. 방어적으로 조용히 넘어간다.
-            return;
-        }
+        Set<Long> offeredUserIds = new HashSet<>(backupOfferRepository.findCandidateIdsByAuctionId(auction.getId()));
+        Long winnerUserId = auction.getCurrentWinner() == null ? null : auction.getCurrentWinner().getId();
 
-        BackupCandidateSelector.next(ranked, buyerRank).ifPresent(candidateBid -> {
+        BackupCandidateSelector.next(ranked, winnerUserId, expiredBuyer.getId(), offeredUserIds).ifPresent(candidateBid -> {
             User candidate = candidateBid.getUser();
-            if (backupOfferRepository.findByAuctionIdAndCandidateId(auction.getId(), candidate.getId()).isPresent()) {
-                // 방어적 중복 방지 - uk_backup_offer_auction_candidate가 최종 방어선이다
-                // (AuctionForfeitService/BackupOfferCommandService와 동일한 패턴).
-                return;
-            }
+            // uk_backup_offer_auction_candidate가 최종 방어선이다.
             BackupOffer saved = backupOfferRepository.save(BackupOffer.create(auction, candidate, candidateBid.getAmount()));
             // #75: 신규 BackupOffer가 실제 저장된 경우에만 기록한다(네 번째 BackupOffer 생성 경로 - 위
             // PAYMENT_EXPIRED 기록과는 별개의 이벤트다).
